@@ -1,0 +1,24 @@
+{
+  "name": "proxiers-server",
+  "version": "1.0.0",
+  "description": "Backend service for QR Code Proximity Validator",
+  "main": "src/proxies.js",
+  "scripts": {
+    "start": "node src/proxies.js",
+    "test": "jest",
+    "lint": "eslint src/**/*.js",
+    "docker-build": "docker build -t qr-code-validator-backend .",
+    "docker-run": "docker run -p 3000:3000 qr-code-validator-backend"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "express": "^4.21.2",
+    "noble": "^1.9.1",
+    "ws": "^8.18.0",
+    "dotenv": "^10.0.0"
+  },
+  "devDependencies": {
+    "jest": "^27.0.0",
+    "eslint": "^7.32.0"
+  }
+}
