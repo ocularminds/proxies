@@ -1,72 +1,59 @@
 const express = require('express');
-const noble = require('noble');
-const WebSocket = require('ws');
 const axios = require('axios');
-
-const app = express();
-app.use(express.json());
-
+const geolib = require('geolib'); // For GPS distance calculations
 const PORT = 1214;
-
+const app = express();
 // Simulate a database of allowed devices
 const allowedDevices = ['BLE_DEVICE_UUID_1', 'BLE_DEVICE_UUID_2'];
+app.use(express.json());
 
-// Step 1: Network validation
-app.post('/validate-network', async (req, res) => {
-  const { hostAddress } = req.body;
+// Predefined thresholds
+const MAX_BLUETOOTH_RSSI = -70; // Threshold RSSI for BLE
+const MAX_WIFI_SIGNAL = -60;   // Threshold Wi-Fi signal strength
+const MAX_DISTANCE_METERS = 50; // GPS proximity threshold
 
+// Proximity Validation Endpoint
+
+app.post('/', async (req, res) => {
   try {
-    const response = await axios.get(`http://${hostAddress}`);
-    if (response.ok) {
-      return res.status(200).json({ success: true, message: 'Host is reachable' });
-    }
-    throw new Error('Host unreachable');
+      return res.status(200).json({ success: true, message: 'Low Energy Bluetooth QR Proximity Validator', status:'Ready.' });    
   } catch (err) {
     return res.status(400).json({ success: false, message: 'Host is not on the network' });
   }
 });
+app.post('/validate-proximity', async (req, res) => {
+  const { qrData, bluetoothRssi, wifiSignalStrength, gpsCoordinates, hostAddress } = req.body;
 
-// Step 2: BLE proximity validation
-app.post('/validate-proximity', (req, res) => {
-  noble.startScanning([], true); // Scan for any BLE devices
-
-  noble.on('discover', (peripheral) => {
-    if (allowedDevices.includes(peripheral.uuid)) {
-      noble.stopScanning();
-      return res.status(200).json({ success: true, message: 'Device is within range' });
+  // Step 1: Check if the host is on the network
+  try {
+    const networkResponse = await axios.get(`http://${hostAddress}`);
+    if (networkResponse.status !== 200) {
+      return res.status(400).json({ success: false, message: 'Host machine is not on the network.' });
     }
-  });
-
-  setTimeout(() => {
-    noble.stopScanning();
-    return res.status(400).json({ success: false, message: 'No nearby BLE devices detected' });
-  }, 5000); // Timeout for scanning
-});
-
-// Step 3: QR code permission
-app.post('/validate', async (req, res) => {
-  const { hostAddress } = req.body;
-
-  // Step 1: Validate network
-  const network = await axios.post('http://localhost:3000/validate-network', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ hostAddress }),
-  });
-
-  if (!network.success) {
-    return res.status(400).json({ success: false, message: networkResult.message });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: 'Failed to connect to the host machine.' });
   }
 
   // Step 2: Validate proximity
-  const proximity = await axios.post('http://localhost:3000/validate-proximity', {
-    method: 'POST',
-  });
-  if (!proximity.success) {
-    return res.status(400).json({ success: false, message: proximityResult.message });
+  if (bluetoothRssi && bluetoothRssi < MAX_BLUETOOTH_RSSI) {
+    return res.status(400).json({ success: false, message: 'Device is out of Bluetooth range.' });
   }
 
-  return res.status(200).json({ success: true, message: 'Validation successful. You may scan the QR code.' });
+  if (wifiSignalStrength && wifiSignalStrength < MAX_WIFI_SIGNAL) {
+    return res.status(400).json({ success: false, message: 'Device is out of Wi-Fi range.' });
+  }
+
+  if (gpsCoordinates) {
+    const hostLocation = { latitude: 12.34567, longitude: 76.54321 }; // Example host coordinates
+    const distance = geolib.getDistance(gpsCoordinates, hostLocation);
+
+    if (distance > MAX_DISTANCE_METERS) {
+      return res.status(400).json({ success: false, message: 'Device is out of GPS range.' });
+    }
+  }
+
+  // Step 3: Proximity validation successful
+  return res.status(200).json({ success: true, message: 'Proximity validation successful.' });
 });
 
-app.listen(PORT, () => console.log(`Proxies.Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log('Low Energy Bluetooth QR Proximity Validator running on port 1412'));
