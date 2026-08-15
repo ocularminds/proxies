@@ -1,5 +1,5 @@
 # proxies
-# Low Enrgey Bluetooth QR Code Proximity Validator
+# Low Energy Bluetooth QR Code Proximity Validator
 
 The QR Code Proximity Validator is a solution designed to ensure secure and reliable proximity validation before allowing QR code scanning. The system uses **Bluetooth Low Energy (BLE)** to validate proximity and performs network checks to confirm the system being scanned into is on the same network as the mobile device.
 
