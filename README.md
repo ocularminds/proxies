@@ -162,6 +162,12 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT` and location permissions; iOS requires
 `NSBluetoothAlwaysUsageDescription`.
 
+## One-box deployment
+
+[deploy/](deploy/) has a Docker Compose scaffold — Timescale-enabled Postgres,
+the server (migrations applied on boot), and Grafana pre-provisioned with the
+Proxies Overview dashboard. See [deploy/README.md](deploy/README.md).
+
 ## Configuration (server)
 
 | Variable | Default | Meaning |
