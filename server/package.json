@@ -13,6 +13,7 @@
     "dev": "tsx watch src/index.ts",
     "db:migrate": "tsx src/migrate.ts",
     "simulate": "tsx scripts/simulate.ts",
+    "provision": "tsx scripts/provision.ts",
     "test": "vitest run",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
