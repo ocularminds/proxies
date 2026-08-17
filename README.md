@@ -39,6 +39,7 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | Threshold validation with strict input validation (no bypass-by-omission) | Implemented, unit-tested |
 | Validation audit logging to Postgres | Implemented (`DATABASE_URL`) |
 | Device enrollment: per-device Ed25519 keys, one-time codes, signed requests | Implemented (P1.2) |
+| Host attestation: envelopes must cross an enrolled host's radio; host-measured RSSI is authoritative when present | Implemented (P1.4) |
 | Wi-Fi / GPS as advisory fallback signals | Collected when available; assurance tiers in Phase 1 |
 | Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
 | Same-network proof (LAN-served token) | Phase 1 |
@@ -74,16 +75,33 @@ To persist validation logs, create a Postgres database (≥ 13), set
 [server/migrations](server/migrations) and are applied in order, tracked in
 `schema_migrations`.
 
-#### Enrolling a device
+#### Enrolling a site, host, and device
 
-Validation requires enrolled devices (Ed25519-signed requests). With
-`ADMIN_TOKEN` set, bootstrap a user and issue a one-time enrollment code:
+Validation requires an enrolled device **and** an enrolled host: the server
+only accepts envelopes wrapped in a host's signed attestation, so a validation
+that never crossed an organization-controlled radio is rejected outright. With
+`ADMIN_TOKEN` set, bootstrap in order — user, site, host, device:
 
 ```bash
 curl -s -X POST localhost:3000/admin/users -H "x-admin-token: $ADMIN_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"organizationName":"Acme","email":"someone@acme.test","displayName":"Someone"}'
 ```
+
+```bash
+curl -s -X POST localhost:3000/admin/sites -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"organizationName":"Acme","name":"HQ","latitude":6.5244,"longitude":3.3792}'
+```
+
+```bash
+curl -s -X POST localhost:3000/admin/hosts -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"siteId":1,"name":"front-desk"}'
+```
+
+Start the host once with `HOST_ENROLLMENT_CODE=<code>` in `host/.env` — it
+generates its keypair, enrolls, and stores its identity in the Electron user
+data directory; the code is single-use and can be removed afterwards.
 
 ```bash
 curl -s -X POST localhost:3000/admin/devices -H "x-admin-token: $ADMIN_TOKEN" \

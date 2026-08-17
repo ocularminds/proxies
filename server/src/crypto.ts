@@ -85,3 +85,16 @@ export function nonceSigningString(deviceId: string, timestamp: string): string 
 export function generateNonce(): string {
   return randomBytes(24).toString('base64url');
 }
+
+// The string a host signs to attest that it relayed a device envelope over its
+// BLE radio. rssi is the host-measured signal (null until the radio reports it).
+export function hostAttestSigningString(
+  hostId: string,
+  timestamp: string,
+  rssi: number | null,
+  envelope: unknown
+): string {
+  return `proxies-host-attest\n${hostId}\n${timestamp}\n${rssi ?? 'null'}\n${sha256Hex(
+    canonicalJson(envelope)
+  )}`;
+}

@@ -1,16 +1,19 @@
 import express, { type Express, type Request, type RequestHandler, type Response } from 'express';
 import {
   adminCreateDevice,
+  adminCreateHost,
+  adminCreateSite,
   adminCreateUser,
+  attestedValidation,
   enrollRequest,
   nonceRequest,
   unsignedValidation,
-  validationEnvelope,
 } from './schema';
 import { evaluateProximity } from './evaluate';
 import {
   generateEnrollmentCode,
   generateNonce,
+  hostAttestSigningString,
   nonceSigningString,
   secretsEqual,
   sha256Hex,
@@ -130,6 +133,90 @@ export function createApp({ config, stores }: AppDeps): Express {
   );
 
   app.post(
+    '/admin/sites',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = adminCreateSite.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+
+      const site = await db.sites.create(
+        parsed.data.organizationName,
+        parsed.data.name,
+        parsed.data.latitude ?? null,
+        parsed.data.longitude ?? null
+      );
+      if (!site) {
+        res.status(409).json({
+          success: false,
+          message: 'A site with that name exists in the organization.',
+        });
+        return;
+      }
+      res.status(201).json({ success: true, siteId: site.id });
+    })
+  );
+
+  app.post(
+    '/admin/hosts',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = adminCreateHost.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+
+      const enrollmentCode = generateEnrollmentCode();
+      try {
+        const host = await db.hosts.createPending(
+          parsed.data.siteId,
+          parsed.data.name,
+          sha256Hex(enrollmentCode),
+          new Date(Date.now() + ENROLLMENT_CODE_TTL_MS)
+        );
+        res.status(201).json({ success: true, hostId: host.id, enrollmentCode });
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === '23503') {
+          res.status(404).json({ success: false, message: 'No site with that id.' });
+          return;
+        }
+        if (code === '23505') {
+          res.status(409).json({ success: false, message: 'A host with that name exists at the site.' });
+          return;
+        }
+        throw err;
+      }
+    })
+  );
+
+  app.post(
+    '/hosts/enroll',
+    wrap(async (req, res) => {
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = enrollRequest.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+
+      const rawKey = Buffer.from(parsed.data.publicKey, 'base64');
+      if (rawKey.length !== 32) {
+        res.status(400).json({
+          success: false,
+          message: 'publicKey must be a base64-encoded raw Ed25519 public key (32 bytes).',
+        });
+        return;
+      }
+      const host = await db.hosts.enroll(sha256Hex(parsed.data.enrollmentCode), parsed.data.publicKey);
+      if (!host) {
+        res.status(400).json({ success: false, message: 'Invalid or expired enrollment code.' });
+        return;
+      }
+      res.json({ success: true, hostId: host.id });
+    })
+  );
+
+  app.post(
     '/devices/enroll',
     wrap(async (req, res) => {
       const db = requireStores(res);
@@ -223,17 +310,22 @@ export function createApp({ config, stores }: AppDeps): Express {
         return;
       }
 
-      const parsed = validationEnvelope.safeParse(req.body);
+      const parsed = attestedValidation.safeParse(req.body);
       if (!parsed.success) return invalid(res, parsed.error.issues);
-      const { deviceId, nonce, signature, metrics } = parsed.data;
+      const { envelope, attestation } = parsed.data;
+      const { deviceId, nonce, signature, metrics } = envelope;
 
       // The audit row is written before the response goes out; a log failure
       // is reported but does not take validation down.
+      let logHostId: string | null = null;
+      let logSiteId: number | null = null;
       const record = async (success: boolean, errorMessage: string | null, deviceUuid?: string) => {
         try {
           await stores.logs.logValidation({
             deviceId,
             deviceUuid: deviceUuid ?? null,
+            hostId: logHostId,
+            siteId: logSiteId,
             success,
             errorMessage,
           });
@@ -245,6 +337,32 @@ export function createApp({ config, stores }: AppDeps): Express {
         await record(false, message, deviceUuid);
         res.status(status).json({ success: false, message });
       };
+
+      // The relaying host vouches first: an envelope that did not cross an
+      // enrolled host's radio never reaches device verification.
+      const host = await stores.hosts.getById(attestation.hostId);
+      if (!host || host.status !== 'active' || !host.publicKey) {
+        return deny(401, 'Unknown or inactive host.');
+      }
+      logHostId = host.id;
+      logSiteId = host.siteId;
+
+      const hostAge = Math.abs(Date.now() - Date.parse(attestation.timestamp));
+      if (!(hostAge <= config.timestampToleranceMs)) {
+        return deny(401, 'Stale or future host attestation.');
+      }
+      const attestString = hostAttestSigningString(
+        attestation.hostId,
+        attestation.timestamp,
+        attestation.rssi,
+        envelope
+      );
+      if (!verifyEd25519(host.publicKey, attestString, attestation.signature)) {
+        return deny(401, 'Invalid host attestation signature.');
+      }
+      await stores.hosts
+        .markSeen(host.id)
+        .catch((err: Error) => console.error('Failed to update host last_seen:', err.message));
 
       const device = await stores.devices.getById(deviceId);
       if (!device) return deny(401, 'Unknown device.');
@@ -269,7 +387,11 @@ export function createApp({ config, stores }: AppDeps): Express {
         .markSeen(device.id)
         .catch((err: Error) => console.error('Failed to update last_seen:', err.message));
 
-      const denial = evaluateProximity(config, metrics);
+      // Host-measured RSSI is authoritative when the radio reports it; the
+      // phone's own reading remains advisory.
+      const effectiveMetrics =
+        attestation.rssi !== null ? { ...metrics, bluetoothRssi: attestation.rssi } : metrics;
+      const denial = evaluateProximity(config, effectiveMetrics);
       if (denial) return deny(403, denial, device.id);
 
       await record(true, null, device.id);

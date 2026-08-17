@@ -35,6 +35,25 @@ export const nonceRequest = z
   })
   .strict();
 
+// The host's counter-signature over the device envelope it relayed: proof the
+// envelope crossed an enrolled host's BLE radio, plus the host-measured RSSI.
+export const hostAttestation = z
+  .object({
+    hostId: z.string().uuid(),
+    timestamp: z.string().datetime(),
+    rssi: z.number().int().min(-127).max(0).nullable(),
+    signature: z.string().min(64).max(512),
+  })
+  .strict();
+
+// What the host actually POSTs: the device envelope, wrapped and attested.
+export const attestedValidation = z
+  .object({
+    envelope: validationEnvelope,
+    attestation: hostAttestation,
+  })
+  .strict();
+
 export const enrollRequest = z
   .object({
     enrollmentCode: z.string().min(8).max(128),
@@ -63,6 +82,22 @@ export const adminCreateUser = z
 export const adminCreateDevice = z
   .object({
     userEmail: z.string().email().max(255),
+  })
+  .strict();
+
+export const adminCreateSite = z
+  .object({
+    organizationName: z.string().min(1).max(255),
+    name: z.string().min(1).max(255),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+  })
+  .strict();
+
+export const adminCreateHost = z
+  .object({
+    siteId: z.number().int().positive(),
+    name: z.string().min(1).max(255),
   })
   .strict();
 

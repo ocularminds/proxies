@@ -15,6 +15,7 @@ interface StatusEventPayload {
   message?: string;
   hostAddress?: string;
   serverUrl?: string;
+  hostId?: string | null;
 }
 
 interface Window {
@@ -47,7 +48,8 @@ function describe(payload: StatusEventPayload): string {
 
 (window as unknown as Window).proxies.onEvent((payload) => {
   if (payload.type === 'host-info') {
-    infoEl.textContent = `LAN ${payload.hostAddress} → server ${payload.serverUrl}`;
+    const enrollment = payload.hostId ? `host ${payload.hostId}` : 'NOT ENROLLED';
+    infoEl.textContent = `LAN ${payload.hostAddress} → server ${payload.serverUrl} · ${enrollment}`;
     return;
   }
   const item = document.createElement('li');
