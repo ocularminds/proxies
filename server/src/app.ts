@@ -168,7 +168,8 @@ export function createApp({ config, stores }: AppDeps): Express {
         parsed.data.organizationName,
         parsed.data.name,
         parsed.data.latitude ?? null,
-        parsed.data.longitude ?? null
+        parsed.data.longitude ?? null,
+        parsed.data.minTier
       );
       if (!site) {
         res.status(409).json({
@@ -349,10 +350,10 @@ export function createApp({ config, stores }: AppDeps): Express {
         if (!parsed.success) return invalid(res, parsed.error.issues);
         const denial = evaluateProximity(config, parsed.data.metrics);
         console.warn(
-          `UNSIGNED validation (dev mode) from "${parsed.data.deviceId}": ${denial ?? 'pass'}`
+          `UNSIGNED validation (dev mode) from "${parsed.data.deviceId}": ${denial?.code ?? 'pass'}`
         );
         if (denial) {
-          res.status(403).json({ success: false, message: denial });
+          res.status(403).json({ success: false, code: denial.code, message: denial.message });
           return;
         }
         res.json({ success: true, message: 'Proximity validation successful (unsigned dev mode).' });
@@ -369,7 +370,13 @@ export function createApp({ config, stores }: AppDeps): Express {
       let logHostId: string | null = null;
       let logSiteId: number | null = null;
       let lanVerified = false;
-      const record = async (success: boolean, errorMessage: string | null, deviceUuid?: string) => {
+      let tier: 'A' | 'B' | 'C' | null = null;
+      const record = async (
+        success: boolean,
+        errorCode: string | null,
+        errorMessage: string | null,
+        deviceUuid?: string
+      ) => {
         try {
           await stores.logs.logValidation({
             deviceId,
@@ -377,6 +384,8 @@ export function createApp({ config, stores }: AppDeps): Express {
             hostId: logHostId,
             siteId: logSiteId,
             lanVerified,
+            assuranceTier: tier,
+            errorCode,
             success,
             errorMessage,
           });
@@ -384,23 +393,28 @@ export function createApp({ config, stores }: AppDeps): Express {
           console.error('Failed to record validation:', (err as Error).message);
         }
       };
-      const deny = async (status: number, message: string, deviceUuid?: string) => {
-        await record(false, message, deviceUuid);
-        res.status(status).json({ success: false, message });
+      const deny = async (
+        status: number,
+        code: string,
+        message: string,
+        deviceUuid?: string
+      ) => {
+        await record(false, code, message, deviceUuid);
+        res.status(status).json({ success: false, code, message });
       };
 
       // The relaying host vouches first: an envelope that did not cross an
       // enrolled host's radio never reaches device verification.
       const host = await stores.hosts.getById(attestation.hostId);
       if (!host || host.status !== 'active' || !host.publicKey) {
-        return deny(401, 'Unknown or inactive host.');
+        return deny(401, 'HOST_UNKNOWN', 'Unknown or inactive host.');
       }
       logHostId = host.id;
       logSiteId = host.siteId;
 
       const hostAge = Math.abs(Date.now() - Date.parse(attestation.timestamp));
       if (!(hostAge <= config.timestampToleranceMs)) {
-        return deny(401, 'Stale or future host attestation.');
+        return deny(401, 'HOST_ATTEST_STALE', 'Stale or future host attestation.');
       }
       const attestString = hostAttestSigningString(
         attestation.hostId,
@@ -409,7 +423,7 @@ export function createApp({ config, stores }: AppDeps): Express {
         envelope
       );
       if (!verifyEd25519(host.publicKey, attestString, attestation.signature)) {
-        return deny(401, 'Invalid host attestation signature.');
+        return deny(401, 'HOST_ATTEST_INVALID', 'Invalid host attestation signature.');
       }
       await stores.hosts
         .markSeen(host.id)
@@ -422,18 +436,22 @@ export function createApp({ config, stores }: AppDeps): Express {
         try {
           parsedToken = JSON.parse(Buffer.from(lanToken, 'base64').toString('utf8'));
         } catch {
-          return deny(401, 'Malformed same-network token.');
+          return deny(401, 'LAN_TOKEN_MALFORMED', 'Malformed same-network token.');
         }
         if (
           parsedToken.hostId !== host.id ||
           typeof parsedToken.issuedAt !== 'string' ||
           typeof parsedToken.sig !== 'string'
         ) {
-          return deny(401, 'Same-network token does not match the attesting host.');
+          return deny(
+            401,
+            'LAN_TOKEN_MISMATCH',
+            'Same-network token does not match the attesting host.'
+          );
         }
         const tokenAge = Math.abs(Date.now() - Date.parse(parsedToken.issuedAt));
         if (!(tokenAge <= config.lanTokenTtlMs)) {
-          return deny(401, 'Expired same-network token.');
+          return deny(401, 'LAN_TOKEN_EXPIRED', 'Expired same-network token.');
         }
         if (
           !verifyEd25519(
@@ -442,42 +460,69 @@ export function createApp({ config, stores }: AppDeps): Express {
             parsedToken.sig
           )
         ) {
-          return deny(401, 'Invalid same-network token signature.');
+          return deny(401, 'LAN_TOKEN_INVALID', 'Invalid same-network token signature.');
         }
         lanVerified = true;
       }
 
       const device = await stores.devices.getById(deviceId);
-      if (!device) return deny(401, 'Unknown device.');
-      if (device.status === 'revoked') return deny(403, 'Device is revoked.', device.id);
+      if (!device) return deny(401, 'DEVICE_UNKNOWN', 'Unknown device.');
+      if (device.status === 'revoked') {
+        return deny(403, 'DEVICE_REVOKED', 'Device is revoked.', device.id);
+      }
       if (device.status !== 'active' || !device.publicKey) {
-        return deny(403, 'Device is not enrolled.', device.id);
+        return deny(403, 'DEVICE_NOT_ENROLLED', 'Device is not enrolled.', device.id);
       }
 
       // Claim before verifying: a bad signature burns the nonce, and parallel
       // replays lose the atomic race.
       const claimed = await stores.nonces.claim(sha256Hex(nonce), device.id);
       if (!claimed) {
-        return deny(401, 'Invalid, expired, or already-used nonce.', device.id);
+        return deny(401, 'NONCE_INVALID', 'Invalid, expired, or already-used nonce.', device.id);
       }
 
       const signedString = validationSigningString(deviceId, nonce, lanToken ?? null, metrics);
       if (!verifyEd25519(device.publicKey, signedString, signature)) {
-        return deny(401, 'Invalid signature.', device.id);
+        return deny(401, 'SIGNATURE_INVALID', 'Invalid signature.', device.id);
       }
 
       await stores.devices
         .markSeen(device.id)
         .catch((err: Error) => console.error('Failed to update last_seen:', err.message));
 
+      // Achieved assurance: A = host-measured radio, B = same-network proof,
+      // C = relay only. Site policy sets the floor.
+      tier = attestation.rssi !== null ? 'A' : lanVerified ? 'B' : 'C';
+      const site = await stores.sites.getById(host.siteId);
+      const TIER_RANK = { A: 3, B: 2, C: 1 } as const;
+      const minTier = site?.minTier ?? 'C';
+      if (TIER_RANK[tier] < TIER_RANK[minTier]) {
+        return deny(
+          403,
+          'TIER_BELOW_POLICY',
+          `Assurance tier ${tier} is below this site's minimum (${minTier}).`,
+          device.id
+        );
+      }
+
+      // Per-site thresholds and coordinates override the global env config.
+      const effectiveConfig = site
+        ? {
+            rssiFloorDbm: site.rssiFloorDbm,
+            wifiFloorDbm: site.wifiFloorDbm,
+            gpsMaxMeters: site.gpsMaxMeters,
+            site: { latitude: site.latitude ?? NaN, longitude: site.longitude ?? NaN },
+          }
+        : config;
+
       // Host-measured RSSI is authoritative when the radio reports it; the
       // phone's own reading remains advisory.
       const effectiveMetrics =
         attestation.rssi !== null ? { ...metrics, bluetoothRssi: attestation.rssi } : metrics;
-      const denial = evaluateProximity(config, effectiveMetrics);
-      if (denial) return deny(403, denial, device.id);
+      const denial = evaluateProximity(effectiveConfig, effectiveMetrics);
+      if (denial) return deny(403, denial.code, denial.message, device.id);
 
-      await record(true, null, device.id);
+      await record(true, null, null, device.id);
 
       // Mint the single-use QR session the host will display.
       let session: { id: string; expiresInMs: number } | null = null;
@@ -492,7 +537,7 @@ export function createApp({ config, stores }: AppDeps): Express {
       } catch (err) {
         console.error('Failed to mint session:', (err as Error).message);
       }
-      res.json({ success: true, message: 'Proximity validation successful.', session });
+      res.json({ success: true, message: 'Proximity validation successful.', tier, session });
     })
   );
 

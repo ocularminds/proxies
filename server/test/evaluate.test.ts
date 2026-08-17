@@ -18,13 +18,13 @@ describe('evaluateProximity', () => {
   });
 
   test('denies a weak Bluetooth signal', () => {
-    expect(evaluateProximity(config(), { bluetoothRssi: -85 })).toMatch(/Bluetooth/);
+    expect(evaluateProximity(config(), { bluetoothRssi: -85 })?.code).toBe('RSSI_BELOW_FLOOR');
   });
 
   test('denies a weak Wi-Fi signal when provided', () => {
     expect(
-      evaluateProximity(config(), { bluetoothRssi: -50, wifiSignalStrength: -75 })
-    ).toMatch(/Wi-Fi/);
+      evaluateProximity(config(), { bluetoothRssi: -50, wifiSignalStrength: -75 })?.code
+    ).toBe('WIFI_BELOW_FLOOR');
   });
 
   test('ignores GPS when the site has no coordinates', () => {
@@ -41,8 +41,8 @@ describe('evaluateProximity', () => {
       evaluateProximity(config({ site: { latitude: 6.5244, longitude: 3.3792 } }), {
         bluetoothRssi: -50,
         gpsCoordinates: { latitude: 6.6, longitude: 3.5 },
-      })
-    ).toMatch(/GPS/);
+      })?.code
+    ).toBe('GPS_OUT_OF_BOUNDS');
   });
 
   test('passes GPS near the configured site', () => {

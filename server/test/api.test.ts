@@ -483,6 +483,58 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     await pool.query(`UPDATE hosts SET status = 'active' WHERE id = $1`, [hostId]);
   });
 
+  test('tier policy: a site requiring tier B refuses relay-only validations', async () => {
+    await pool.query(`UPDATE sites SET min_tier = 'B' WHERE id = $1`, [siteId]);
+
+    // Tier C: no host-measured RSSI, no LAN token.
+    const tierC = await freshAttestedValidation({ bluetoothRssi: -50 });
+    expect(tierC.status).toBe(403);
+    expect(tierC.body.code).toBe('TIER_BELOW_POLICY');
+
+    // Tier B: LAN token verified.
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const lanToken = makeLanToken(hostId, hostKeys.privateKey);
+    const tierB = await request(app)
+      .post('/validate-proximity')
+      .send(
+        attest(
+          envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce, lanToken),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
+    expect(tierB.status).toBe(200);
+    expect(tierB.body.tier).toBe('B');
+
+    // Tier A: host-measured RSSI outranks B.
+    const tierA = await freshAttestedValidation({ bluetoothRssi: -50 }, -48);
+    expect(tierA.status).toBe(200);
+    expect(tierA.body.tier).toBe('A');
+
+    const tierLog = await pool.query(
+      `SELECT assurance_tier, error_code FROM validation_logs
+       WHERE device_uuid = $1 AND error_code = 'TIER_BELOW_POLICY'`,
+      [deviceId]
+    );
+    expect(tierLog.rows.length).toBeGreaterThan(0);
+    expect(tierLog.rows[0].assurance_tier).toBe('C');
+
+    await pool.query(`UPDATE sites SET min_tier = 'C' WHERE id = $1`, [siteId]);
+  });
+
+  test('per-site thresholds override the global config', async () => {
+    // Site floor -60: a host-measured -65 must be denied even though the
+    // global floor (-70) would pass it.
+    await pool.query(`UPDATE sites SET rssi_floor_dbm = -60 WHERE id = $1`, [siteId]);
+    const denied = await freshAttestedValidation({ bluetoothRssi: -50 }, -65);
+    expect(denied.status).toBe(403);
+    expect(denied.body.code).toBe('RSSI_BELOW_FLOOR');
+
+    const passed = await freshAttestedValidation({ bluetoothRssi: -50 }, -55);
+    expect(passed.status).toBe(200);
+    await pool.query(`UPDATE sites SET rssi_floor_dbm = -70 WHERE id = $1`, [siteId]);
+  });
+
   test('a revoked device is refused', async () => {
     const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
     await pool.query(`UPDATE devices SET status = 'revoked' WHERE id = $1`, [deviceId]);

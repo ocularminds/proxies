@@ -31,9 +31,9 @@ platform's first application, never a fork.
 | --- | --- | --- |
 | Network validation ("same network as the mobile device") | ✅ P1.7 — phone must fetch a host-signed token from the host's LAN-bound listener; verified server-side, logged per validation | done |
 | BLE-measured proximity | ◐ link real (host advertises, phone submits, verdict notified) | P0 done · trust: P1.4 + P1.5 |
-| Wi-Fi / GPS fallback when BLE unavailable | ◐ collected as advisory; never faked | P1.11 (assurance tiers) |
+| Wi-Fi / GPS fallback when BLE unavailable | ✅ P1.11 — explicit tiers (A radio-measured · B same-network · C relay-only) with per-site minimum policy; fallback is scored, never silently equal | done |
 | QR scanning gated on validation | ✅ P1.8 — approval mints a single-use 2-min session; host renders the QR; `/sessions/redeem` claims it atomically | done |
-| Error reporting | ◐ verdicts surfaced on phone + host; logged to Postgres | P1.11 (taxonomy) |
+| Error reporting | ✅ P1.11 — structured error codes on every denial, surfaced to phone + host, logged (`error_code`) | done |
 | GitHub Actions testing & deployment | ✅ lint + typecheck + tests + audit on every push | P0 done · deploy: Phase 2 |
 
 ## Findings register
@@ -63,7 +63,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | S8 | Electron renderer had full Node access | Med | ✅ P0 (contextIsolation + sandbox + preload) |
 | S9 | Unvalidated input crashed the server | Med | ✅ P0 (schema + guarded parse, tested) |
 | S10 | Abandoned/unused/outdated dependencies; no lockfiles | Med | ✅ P0 (pruned, TS toolchain, lockfiles, audit in CI; `@abandonware/bleno` → maintained `@stoprocent/bleno` after tar advisory chain) · bleno exit: P2.7 |
-| S11 | Config and site coordinates hardcoded | Low | ◐ env-based (P0); sites table with per-site thresholds landed (P1.1); request wiring: P1.11 |
+| S11 | Config and site coordinates hardcoded | Low | ✅ P1.11 — per-site thresholds, coordinates, and tier policy resolved from the database per validation; env is the fallback |
 | P1 | Unfiltered always-on BLE scan | High | ✅ P0 (host advertises; no scanning at all) |
 | P2 | Outbound fetch with no timeout | High | ✅ P0 (probe removed; host→server 3 s timeout) |
 | P3 | Single-sample RSSI noise → flaky verdicts | Med | ✅ P1.5 — host samples every 500 ms, attests the median of the last 10; hysteresis/calibration tuning with real hardware (M1) |
@@ -109,7 +109,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 | P1.8 ✅ | QR gate: approval mints a DB-backed single-use session (2 min TTL) bound to device/host/site; host renders the QR (main-process generation, data-URL to renderer); `/sessions/redeem` claims atomically and returns user/device/site | contract, G7 |
 | P1.9 | TLS on all HTTP; app-layer AES-GCM over BLE under enrolled keys; reject un-enrolled peers | S6, S7 |
 | P1.10 ✅ | Rate limiting (per-IP global budget + stricter enroll budget, RFC draft-7 headers, `TRUST_PROXY` switch) + helmet | P4 |
-| P1.11 | Assurance tiers (A: BLE challenge–response · B: LAN token + attested GPS · C: deny) + error taxonomy, logged per decision | S1 class, contract |
+| P1.11 ✅ | Assurance tiers (A: host-measured radio · B: same-network proof · C: relay-only) with per-site `min_tier` policy; per-site thresholds/coords override env; structured error codes on every denial, logged (`assurance_tier`, `error_code`); tier returned on success | S11, contract |
 | P1.12 | GPS attestation via Play Integrity / DeviceCheck (only if GPS stays load-bearing) | S2 residual |
 
 Residual risk to document, not hide: **relay attacks** (two radios bridging host and a
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | P1.11 shipped: assurance tiers + per-site policy + error taxonomy. Each validation earns a tier — A (host-measured radio), B (same-network proof), C (relay-only) — checked against the site's `min_tier`; per-site thresholds and coordinates now override env config (S11 closed); every denial carries a structured code (HOST_*, LAN_TOKEN_*, DEVICE_*, NONCE_INVALID, SIGNATURE_INVALID, TIER_BELOW_POLICY, RSSI/WIFI/GPS codes) logged in `error_code` with the achieved tier in `assurance_tier`. |
 | 2026-08-17 | P1.8 shipped: the QR gate the product was named for. A successful validation mints a DB-backed, single-use session (2 min TTL, bound to device/host/site); the host generates the QR in the main process and the status window displays it until expiry; `/sessions/redeem` (admin-token gated, for the org's scanning system) claims it atomically — replays and expired sessions answer 400 — returning user email, device, and site for the consuming system. |
 | 2026-08-17 | P1.7 shipped: same-network proof. The host binds an HTTP listener to its LAN address only and serves signed 2-minute tokens; the phone learns the listener URL from a new BLE read characteristic, fetches a token, and binds it into its signed envelope (the signing string gained a LAN-token slot — literal `null` when absent). Server verifies host binding, freshness, and signature; invalid tokens deny hard, absent tokens are recorded as `lan_verified = false` for tier policy (P1.11). Note: the LAN URL is readable by any connected central (private-IP disclosure, accepted until P1.9/P2.7 peer gating). |
 | 2026-08-17 | P1.10 shipped: helmet security headers plus per-IP rate limits — a global request budget and a stricter one on the code-burning enroll endpoints; `TRUST_PROXY` documented for reverse-proxy deployments. |

@@ -42,7 +42,8 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | Host attestation: envelopes must cross an enrolled host's radio; host-measured RSSI is authoritative when present | Implemented (P1.4) |
 | Same-network proof: host-signed token served on its LAN-only listener | Implemented (P1.7) |
 | QR scanning gated on validation: single-use session QR on the host, redeemed once | Implemented (P1.8) |
-| Wi-Fi / GPS as advisory fallback signals | Collected when available; assurance tiers in Phase 1 |
+| Assurance tiers (A radio-measured · B same-network · C relay-only) with per-site minimum policy and per-site thresholds | Implemented (P1.11) |
+| Structured error codes on every denial, logged with the achieved tier | Implemented (P1.11) |
 | Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
 | Same-network proof (LAN-served token) | Phase 1 |
 | QR scanning gated on a signed session token | Phase 1 |

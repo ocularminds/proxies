@@ -7,19 +7,27 @@ export interface ProximityMetrics {
   gpsCoordinates?: { latitude: number; longitude: number };
 }
 
-// Pure threshold evaluation. Returns null on pass, or the denial message.
+export interface ProximityDenial {
+  code: 'RSSI_BELOW_FLOOR' | 'WIFI_BELOW_FLOOR' | 'GPS_OUT_OF_BOUNDS';
+  message: string;
+}
+
+// Pure threshold evaluation. Returns null on pass, or the coded denial.
 export function evaluateProximity(
   config: ValidationConfig,
   metrics: ProximityMetrics
-): string | null {
+): ProximityDenial | null {
   if (metrics.bluetoothRssi < config.rssiFloorDbm) {
-    return 'Bluetooth signal too weak: device is out of range.';
+    return {
+      code: 'RSSI_BELOW_FLOOR',
+      message: 'Bluetooth signal too weak: device is out of range.',
+    };
   }
   if (
     metrics.wifiSignalStrength !== undefined &&
     metrics.wifiSignalStrength < config.wifiFloorDbm
   ) {
-    return 'Wi-Fi signal too weak: device is out of range.';
+    return { code: 'WIFI_BELOW_FLOOR', message: 'Wi-Fi signal too weak: device is out of range.' };
   }
   if (
     metrics.gpsCoordinates &&
@@ -28,7 +36,7 @@ export function evaluateProximity(
   ) {
     const distance = distanceMeters(metrics.gpsCoordinates, config.site);
     if (distance > config.gpsMaxMeters) {
-      return 'Device is outside the site GPS boundary.';
+      return { code: 'GPS_OUT_OF_BOUNDS', message: 'Device is outside the site GPS boundary.' };
     }
   }
   return null;
