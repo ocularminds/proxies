@@ -16,6 +16,7 @@ interface StatusEventPayload {
   hostAddress?: string;
   serverUrl?: string;
   hostId?: string | null;
+  rssi?: number | null;
 }
 
 interface Window {
@@ -37,6 +38,10 @@ function describe(payload: StatusEventPayload): string {
       return `Device disconnected (${payload.clientAddress})`;
     case 'metrics-received':
       return `Metrics received from ${payload.metrics?.deviceId ?? 'unknown device'}`;
+    case 'rssi-measured':
+      return payload.rssi === null || payload.rssi === undefined
+        ? 'Host RSSI unavailable — radio does not report it; phone value stays advisory'
+        : `Host-measured RSSI ${payload.rssi} dBm (windowed median)`;
     case 'validation-result':
       return payload.result?.message ?? 'Validation result';
     case 'error':

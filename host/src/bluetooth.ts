@@ -93,14 +93,71 @@ class MetricsCharacteristic extends Characteristic {
   }
 }
 
+const RSSI_SAMPLE_INTERVAL_MS = 500;
+const RSSI_WINDOW = 10;
+
+// Samples the connection RSSI while a central is connected. One reading is
+// noise (±10 dB); the median of a sliding window is what the host attests.
+class RssiSampler {
+  private samples: number[] = [];
+  private timer: NodeJS.Timeout | null = null;
+  private failures = 0;
+
+  start() {
+    this.stop();
+    this.timer = setInterval(() => void this.sample(), RSSI_SAMPLE_INTERVAL_MS);
+  }
+
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+    }
+    this.timer = null;
+    this.samples = [];
+    this.failures = 0;
+  }
+
+  private async sample() {
+    try {
+      const rssi = await bleno.updateRssiAsync();
+      if (Number.isFinite(rssi) && rssi < 0) {
+        this.samples.push(rssi);
+        if (this.samples.length > RSSI_WINDOW) {
+          this.samples.shift();
+        }
+      }
+      this.failures = 0;
+    } catch {
+      // Not every radio binding reports RSSI; stop asking after repeated
+      // failures and let the attestation carry null.
+      this.failures += 1;
+      if (this.failures >= 3 && this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    }
+  }
+
+  median(): number | null {
+    if (this.samples.length === 0) {
+      return null;
+    }
+    const sorted = [...this.samples].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2
+      ? sorted[mid]
+      : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  }
+}
+
 // Wraps the device's envelope in this host's attestation: proof the envelope
-// crossed this host's radio. rssi stays null until P1.5's sampling lands.
+// crossed this host's radio, carrying the host-measured RSSI median.
 async function validateWithServer(
   envelope: unknown,
-  identity: HostIdentity
+  identity: HostIdentity,
+  rssi: number | null
 ): Promise<ValidationResult> {
   const timestamp = new Date().toISOString();
-  const rssi: number | null = null;
   const signature = signWithIdentity(
     identity,
     hostAttestSigningString(identity.hostId, timestamp, rssi, envelope)
@@ -123,6 +180,7 @@ export interface BluetoothDeps {
 }
 
 export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
+  const sampler = new RssiSampler();
   const resultCharacteristic = new ResultCharacteristic();
   const metricsCharacteristic = new MetricsCharacteristic(async (envelope) => {
     onEvent({ type: 'metrics-received', metrics: envelope });
@@ -134,8 +192,10 @@ export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
         message: 'Host is not enrolled — ask an admin for an enrollment code.',
       };
     } else {
+      const rssi = sampler.median();
+      onEvent({ type: 'rssi-measured', rssi });
       try {
-        result = await validateWithServer(envelope, identity);
+        result = await validateWithServer(envelope, identity, rssi);
       } catch (err) {
         result = { success: false, message: `Server unreachable: ${(err as Error).message}` };
       }
@@ -166,8 +226,12 @@ export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
     onEvent({ type: 'advertising', name: config.hostName });
   });
 
-  bleno.on('accept', (clientAddress: string) => onEvent({ type: 'connected', clientAddress }));
-  bleno.on('disconnect', (clientAddress: string) =>
-    onEvent({ type: 'disconnected', clientAddress })
-  );
+  bleno.on('accept', (clientAddress: string) => {
+    sampler.start();
+    onEvent({ type: 'connected', clientAddress });
+  });
+  bleno.on('disconnect', (clientAddress: string) => {
+    sampler.stop();
+    onEvent({ type: 'disconnected', clientAddress });
+  });
 }
