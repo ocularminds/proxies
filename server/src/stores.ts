@@ -5,7 +5,10 @@ export type DeviceStatus = 'pending' | 'active' | 'revoked';
 
 export interface DeviceRecord {
   id: string;
-  userId: number;
+  userId: number | null;
+  kind: 'phone' | 'sensor' | 'gateway';
+  siteId: number | null;
+  organizationId: number | null;
   publicKey: string | null;
   status: DeviceStatus;
 }
@@ -13,9 +16,34 @@ export interface DeviceRecord {
 export interface DeviceStore {
   getById(id: string): Promise<DeviceRecord | null>;
   createPending(userId: number, codeHash: string, expiresAt: Date): Promise<{ id: string }>;
+  createPendingForSite(
+    siteId: number,
+    kind: 'sensor' | 'gateway',
+    name: string | null,
+    codeHash: string,
+    expiresAt: Date
+  ): Promise<{ id: string }>;
   // Atomically claims an unexpired, unused code; returns the activated device.
   enroll(codeHash: string, publicKey: string, platform: string | null): Promise<DeviceRecord | null>;
   markSeen(id: string): Promise<void>;
+  // Strictly monotonic per-device batch counter; false = replay/reorder.
+  claimTelemetrySeq(id: string, seq: number): Promise<boolean>;
+}
+
+export interface TelemetryStore {
+  insertBatch(
+    deviceUuid: string,
+    organizationId: number,
+    siteId: number | null,
+    readings: {
+      ts: string;
+      type: string;
+      value: number;
+      unit?: string;
+      battery?: number;
+      quality?: string;
+    }[]
+  ): Promise<number>;
 }
 
 export interface UserStore {
@@ -94,6 +122,7 @@ export interface Stores {
   hosts: HostStore;
   sites: SiteStore;
   sessions: SessionStore;
+  telemetry: TelemetryStore;
   close(): Promise<void>;
 }
 
@@ -137,16 +166,36 @@ export function createStores(databaseUrl: string | null): Stores | null {
     async close() {},
   };
 
+  const deviceRow = (row: {
+    id: string;
+    user_id: string | number | null;
+    kind: 'phone' | 'sensor' | 'gateway';
+    site_id: string | number | null;
+    organization_id: string | number | null;
+    public_key: string | null;
+    status: DeviceStatus;
+  }): DeviceRecord => ({
+    id: row.id,
+    userId: row.user_id === null ? null : Number(row.user_id),
+    kind: row.kind,
+    siteId: row.site_id === null ? null : Number(row.site_id),
+    organizationId: row.organization_id === null ? null : Number(row.organization_id),
+    publicKey: row.public_key,
+    status: row.status,
+  });
+
+  // Organization resolves through the user (phones) or the site (sensors).
+  const DEVICE_SELECT = `
+    SELECT d.id, d.user_id, d.kind, d.site_id, d.public_key, d.status,
+           COALESCE(u.organization_id, s.organization_id) AS organization_id
+    FROM devices d
+    LEFT JOIN users u ON u.id = d.user_id
+    LEFT JOIN sites s ON s.id = d.site_id`;
+
   const devices: DeviceStore = {
     async getById(id) {
-      const result = await pool.query(
-        `SELECT id, user_id, public_key, status FROM devices WHERE id = $1`,
-        [id]
-      );
-      const row = result.rows[0];
-      return row
-        ? { id: row.id, userId: Number(row.user_id), publicKey: row.public_key, status: row.status }
-        : null;
+      const result = await pool.query(`${DEVICE_SELECT} WHERE d.id = $1`, [id]);
+      return result.rows[0] ? deviceRow(result.rows[0]) : null;
     },
     async createPending(userId, codeHash, expiresAt) {
       const result = await pool.query(
@@ -156,24 +205,72 @@ export function createStores(databaseUrl: string | null): Stores | null {
       );
       return { id: result.rows[0].id };
     },
+    async createPendingForSite(siteId, kind, name, codeHash, expiresAt) {
+      const result = await pool.query(
+        `INSERT INTO devices (kind, site_id, name, enrollment_code_hash, enrollment_code_expires_at)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [kind, siteId, name, codeHash, expiresAt]
+      );
+      return { id: result.rows[0].id };
+    },
     async enroll(codeHash, publicKey, platform) {
       const result = await pool.query(
-        `UPDATE devices
-         SET status = 'active', public_key = $2, platform = $3, enrolled_at = now(),
-             enrollment_code_hash = NULL, enrollment_code_expires_at = NULL
-         WHERE enrollment_code_hash = $1
-           AND enrollment_code_expires_at > now()
-           AND status = 'pending'
-         RETURNING id, user_id, public_key, status`,
+        `WITH updated AS (
+           UPDATE devices
+           SET status = 'active', public_key = $2, platform = $3, enrolled_at = now(),
+               enrollment_code_hash = NULL, enrollment_code_expires_at = NULL
+           WHERE enrollment_code_hash = $1
+             AND enrollment_code_expires_at > now()
+             AND status = 'pending'
+           RETURNING *
+         )
+         SELECT d.id, d.user_id, d.kind, d.site_id, d.public_key, d.status,
+                COALESCE(u.organization_id, s.organization_id) AS organization_id
+         FROM updated d
+         LEFT JOIN users u ON u.id = d.user_id
+         LEFT JOIN sites s ON s.id = d.site_id`,
         [codeHash, publicKey, platform]
       );
-      const row = result.rows[0];
-      return row
-        ? { id: row.id, userId: Number(row.user_id), publicKey: row.public_key, status: row.status }
-        : null;
+      return result.rows[0] ? deviceRow(result.rows[0]) : null;
     },
     async markSeen(id) {
       await pool.query(`UPDATE devices SET last_seen_at = now() WHERE id = $1`, [id]);
+    },
+    async claimTelemetrySeq(id, seq) {
+      const result = await pool.query(
+        `UPDATE devices SET last_telemetry_seq = $2
+         WHERE id = $1 AND (last_telemetry_seq IS NULL OR last_telemetry_seq < $2)
+         RETURNING id`,
+        [id, seq]
+      );
+      return result.rows.length > 0;
+    },
+  };
+
+  const telemetry: TelemetryStore = {
+    async insertBatch(deviceUuid, organizationId, siteId, readings) {
+      const params: unknown[] = [];
+      const rows = readings.map((reading, i) => {
+        const base = i * 9;
+        params.push(
+          reading.ts,
+          organizationId,
+          siteId,
+          deviceUuid,
+          reading.type,
+          reading.value,
+          reading.unit ?? null,
+          reading.battery ?? null,
+          reading.quality ?? null
+        );
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+      });
+      const result = await pool.query(
+        `INSERT INTO telemetry (ts, organization_id, site_id, device_uuid, type, value, unit, battery, quality)
+         VALUES ${rows.join(', ')}`,
+        params
+      );
+      return result.rowCount ?? 0;
     },
   };
 
@@ -348,6 +445,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
     hosts,
     sites,
     sessions,
+    telemetry,
     async close() {
       await pool.end();
     },
