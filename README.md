@@ -4,32 +4,35 @@
 on premises before allowing a QR-code action, using a BLE link between the phone and an
 organization-controlled host machine, with a validation server deciding and logging every attempt.
 
-Proxies is also the seed of something larger: the same pipeline (enrolled devices → signed
-readings → gateway → store → rules) is being grown into a real-time sensing platform for
-agriculture, waste management, factories, and water systems. The full review, fix plan, and
-expansion roadmap live in [docs/ROADMAP.md](docs/ROADMAP.md) — that document is the living
-plan and is updated as work lands.
+Proxies has grown past the QR product into its intended shape: a **real-time
+sensing platform** where presence is the first stream among many — the same
+pipeline (enrolled endpoints → signed readings → time-series store → rules →
+alerts → dashboards) that agriculture, waste management, factory, and water
+deployments need. The platform slice is **live and smoke-tested end to end**
+(sensor enrollment → signed batches → Timescale hypertable → rule firing →
+alert → Grafana). The living plan is [docs/ROADMAP.md](docs/ROADMAP.md),
+updated in every PR that changes status.
 
 ## How it works today
 
 ```
-mobile (Capacitor, BLE central)
-   │  connects to the host's GATT service, writes metrics JSON,
-   │  subscribes for the verdict
+mobile (BLE central)             sensors / gateways
+   │ nonce + signed envelope        │ signed telemetry batches
+   ▼                                ▼
+host (Electron, BLE peripheral)  HTTPS POST /telemetry  or  MQTT proxies/telemetry/<id>
+   │ measures RSSI (median),        │
+   │ counter-signs + relays         │
+   ▼                                ▼
+server (Express + zod, TypeScript) — one transport-agnostic ingest pipeline
+   │  enrollment (Ed25519) · single-use nonces · host attestation ·
+   │  same-network proof · assurance tiers · threshold rules → alerts
    ▼
-host (Electron tray app, BLE peripheral via bleno)
-   │  forwards metrics to the server (3s timeout), notifies the
-   │  phone of the verdict, shows a live status window
-   ▼
-server (Express + zod)
-   │  strict schema validation — missing signals are a denial, not a pass;
-   │  threshold checks (BLE floor, optional Wi-Fi floor, optional GPS boundary)
-   ▼
-Postgres (validation_logs) — every attempt recorded when DATABASE_URL is set
+TimescaleDB (hypertable telemetry + audit tables) ──► Grafana dashboard
 ```
 
 The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-checked
-(lint, typecheck, tests, `npm audit`) on every push.
+(lint, typecheck, tests against Timescale-enabled Postgres, `npm audit`) on
+every push. [deploy/](deploy/) boots the whole stack with one `docker compose up`.
 
 ## Feature status
 
@@ -44,19 +47,24 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | QR scanning gated on validation: single-use session QR on the host, redeemed once | Implemented (P1.8) |
 | Assurance tiers (A radio-measured · B same-network · C relay-only) with per-site minimum policy and per-site thresholds | Implemented (P1.11) |
 | Structured error codes on every denial, logged with the achieved tier | Implemented (P1.11) |
-| Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
-| Same-network proof (LAN-served token) | Phase 1 |
-| QR scanning gated on a signed session token | Phase 1 |
-| Sensor platform (MQTT ingest, TimescaleDB, rules, fleet mgmt) | Phase 2 |
+| Telemetry platform: canonical signed envelope, Timescale hypertable storage, org/site/device attribution | Implemented (P2.1/P2.4) — live-verified |
+| Sensor/gateway enrollment (site-bound) + HTTPS batch ingest with seq replay protection | Implemented (P2.9) |
+| MQTT transport sharing the same ingest pipeline (`proxies/telemetry/<id>` + acks) | Implemented (P2.2/P2.3 v1) |
+| Threshold rules → persisted alerts with pluggable delivery (webhook/console) | Implemented (P2.5 v1) |
+| Fleet health (`/admin/fleet`): last-seen, battery, staleness for every device and host | Implemented (P2.6) |
+| Presence as telemetry — validations land in the same stream as sensor data | Implemented (P2.10) |
+| One-box deploy: Timescale + server + mosquitto + provisioned Grafana dashboard | Implemented (P2.8) — first boot verified |
+| Gateway hardware, BLE payload crypto, retention/aggregates, SMS/WhatsApp | Remaining — see roadmap |
 
 ## Repository layout
 
 ```
-server/   Validation API — Express, zod, pg, vitest
+server/   Validation + telemetry platform — Express, zod, pg, mqtt, vitest
 host/     Desktop host — Electron, @stoprocent/bleno (BLE peripheral)
 mobile/   Phone app — Capacitor + Vite (BLE central)
 shared/   Cross-component constants (BLE service/characteristic UUIDs)
-docs/     ROADMAP.md — living review, fix plan, and expansion plan
+deploy/   One-box Docker Compose: Timescale, server, mosquitto, Grafana
+docs/     ROADMAP.md (living plan) · TELEMETRY.md (canonical envelope)
 ```
 
 ## Getting started
@@ -188,6 +196,8 @@ Proxies Overview dashboard. See [deploy/README.md](deploy/README.md).
 | `RATE_LIMIT_ENROLL_MAX` | `10` | Stricter per-IP budget on the enroll endpoints |
 | `TRUST_PROXY` | `false` | Set behind a reverse proxy so limits see real client IPs |
 | `TLS_CERT_PATH` / `TLS_KEY_PATH` | unset | Serve HTTPS directly (dev: mkcert); otherwise terminate TLS at a proxy |
+| `MQTT_URL` | unset | Broker URL; when set, the bridge subscribes to `proxies/telemetry/+` |
+| `MQTT_USERNAME` / `MQTT_PASSWORD` | unset | Broker credentials when it requires them |
 
 ## Security model — read this
 

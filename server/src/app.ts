@@ -11,7 +11,6 @@ import {
   enrollRequest,
   nonceRequest,
   redeemRequest,
-  telemetryBatch,
   unsignedValidation,
 } from './schema';
 import { evaluateProximity } from './evaluate';
@@ -23,54 +22,20 @@ import {
   nonceSigningString,
   secretsEqual,
   sha256Hex,
-  telemetrySigningString,
   validationSigningString,
   verifyEd25519,
 } from './crypto';
 import type { AppConfig } from './types';
-import type { RuleRecord, Stores } from './stores';
+import type { Stores } from './stores';
+import { defaultNotifier, type Notifier } from './notify';
+import { processTelemetryBatch } from './ingest';
+
+export type { AlertNotification, Notifier } from './notify';
 
 export type AppRuntimeConfig = Omit<
   AppConfig,
-  'port' | 'databaseUrl' | 'tlsCertPath' | 'tlsKeyPath'
+  'port' | 'databaseUrl' | 'tlsCertPath' | 'tlsKeyPath' | 'mqttUrl' | 'mqttUsername' | 'mqttPassword'
 >;
-
-export interface AlertNotification {
-  alertId: number;
-  rule: RuleRecord;
-  deviceUuid: string;
-  readingTs: string;
-  value: number;
-}
-
-export type Notifier = (notification: AlertNotification) => Promise<void>;
-
-// Default delivery: the rule's webhook when it has one, loud console otherwise
-// (SMS/WhatsApp adapters plug in here later).
-const defaultNotifier: Notifier = async ({ rule, deviceUuid, readingTs, value }) => {
-  const payload = {
-    ruleId: rule.id,
-    metricType: rule.metricType,
-    op: rule.op,
-    threshold: rule.threshold,
-    deviceUuid,
-    readingTs,
-    value,
-  };
-  if (rule.webhookUrl) {
-    const response = await fetch(rule.webhookUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) {
-      throw new Error(`Webhook answered ${response.status}`);
-    }
-    return;
-  }
-  console.warn('ALERT:', JSON.stringify(payload));
-};
 
 export interface AppDeps {
   config: AppRuntimeConfig;
@@ -417,112 +382,17 @@ export function createApp({ config, stores, notifier = defaultNotifier }: AppDep
   );
 
   // Signed telemetry batches from any enrolled endpoint — see docs/TELEMETRY.md.
+  // The pipeline is transport-agnostic (src/ingest.ts); MQTT shares it.
   app.post(
     '/telemetry',
     wrap(async (req, res) => {
       const db = requireStores(res);
       if (!db) return;
-      const parsed = telemetryBatch.safeParse(req.body);
-      if (!parsed.success) return invalid(res, parsed.error.issues);
-      const { deviceId, seq, timestamp, signature, readings } = parsed.data;
-
-      const device = await db.devices.getById(deviceId);
-      if (!device || device.status !== 'active' || !device.publicKey) {
-        res
-          .status(401)
-          .json({ success: false, code: 'DEVICE_UNKNOWN', message: 'Unknown or inactive device.' });
-        return;
-      }
-      const age = Math.abs(Date.now() - Date.parse(timestamp));
-      if (!(age <= config.timestampToleranceMs)) {
-        res
-          .status(401)
-          .json({ success: false, code: 'BATCH_STALE', message: 'Stale or future batch timestamp.' });
-        return;
-      }
-      const maxFutureMs = Date.now() + 5 * 60 * 1000;
-      if (readings.some((reading) => Date.parse(reading.ts) > maxFutureMs)) {
-        res.status(400).json({
-          success: false,
-          code: 'READING_TS_FUTURE',
-          message: 'Reading timestamps may not be in the future.',
-        });
-        return;
-      }
-
-      // Claim the seq before verifying — replays and reorders lose the race.
-      const claimed = await db.devices.claimTelemetrySeq(device.id, seq);
-      if (!claimed) {
-        res.status(409).json({
-          success: false,
-          code: 'SEQ_REPLAYED',
-          message: 'Batch seq must be strictly greater than the last accepted one.',
-        });
-        return;
-      }
-      const signedString = telemetrySigningString(deviceId, seq, timestamp, readings);
-      if (!verifyEd25519(device.publicKey, signedString, signature)) {
-        res
-          .status(401)
-          .json({ success: false, code: 'SIGNATURE_INVALID', message: 'Invalid signature.' });
-        return;
-      }
-      if (device.organizationId === null) {
-        res.status(403).json({
-          success: false,
-          code: 'DEVICE_UNATTRIBUTED',
-          message: 'Device has no organization attribution.',
-        });
-        return;
-      }
-
-      const accepted = await db.telemetry.insertBatch(
-        device.id,
-        device.organizationId,
-        device.siteId,
-        readings
+      const result = await processTelemetryBatch(
+        { config: { timestampToleranceMs: config.timestampToleranceMs }, stores: db, notifier },
+        req.body
       );
-      await db.devices
-        .markSeen(device.id)
-        .catch((err: Error) => console.error('Failed to update last_seen:', err.message));
-
-      // Threshold rules: at most one alert per rule per batch.
-      let alertsFired = 0;
-      try {
-        const types = [...new Set(readings.map((reading) => reading.type))];
-        const activeRules = await db.rules.matching(
-          device.organizationId,
-          device.siteId,
-          device.id,
-          types
-        );
-        for (const rule of activeRules) {
-          const hit = readings.find(
-            (reading) =>
-              reading.type === rule.metricType &&
-              (rule.op === 'gt' ? reading.value > rule.threshold : reading.value < rule.threshold)
-          );
-          if (!hit) continue;
-          const alert = await db.rules.createAlert(rule.id, device.id, hit.ts, hit.value);
-          alertsFired += 1;
-          try {
-            await notifier({
-              alertId: alert.id,
-              rule,
-              deviceUuid: device.id,
-              readingTs: hit.ts,
-              value: hit.value,
-            });
-            await db.rules.markDelivered(alert.id);
-          } catch (err) {
-            console.error('Alert delivery failed:', (err as Error).message);
-          }
-        }
-      } catch (err) {
-        console.error('Rule evaluation failed:', (err as Error).message);
-      }
-
-      res.json({ success: true, accepted, alertsFired });
+      res.status(result.status).json(result.body);
     })
   );
 
