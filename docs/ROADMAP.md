@@ -62,7 +62,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | S7 | Plaintext everywhere (HTTP + BLE) | Med | ⬜ P1.9 |
 | S8 | Electron renderer had full Node access | Med | ✅ P0 (contextIsolation + sandbox + preload) |
 | S9 | Unvalidated input crashed the server | Med | ✅ P0 (schema + guarded parse, tested) |
-| S10 | Abandoned/unused/outdated dependencies; no lockfiles | Med | ✅ P0 (pruned, TS toolchain, lockfiles, audit in CI) · bleno exit: P2.7 |
+| S10 | Abandoned/unused/outdated dependencies; no lockfiles | Med | ✅ P0 (pruned, TS toolchain, lockfiles, audit in CI; `@abandonware/bleno` → maintained `@stoprocent/bleno` after tar advisory chain) · bleno exit: P2.7 |
 | S11 | Config and site coordinates hardcoded | Low | ◐ env-based (P0); sites table: P1.1 |
 | P1 | Unfiltered always-on BLE scan | High | ✅ P0 (host advertises; no scanning at all) |
 | P2 | Outbound fetch with no timeout | High | ✅ P0 (probe removed; host→server 3 s timeout) |
@@ -173,3 +173,4 @@ manual override — before any remote control ships.
 | 2026-08-17 | Initial review published (gaps G1–G10, security S1–S11, performance P1–P6); plan created. |
 | 2026-08-17 | Phase 0 executed: server/host/mobile rebuilt in strict TypeScript; SSRF removed; validation hardened + tested (10 tests); Electron hardened; CI added; Apache-2.0 standardized (owner decision); lockfiles committed. |
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
+| 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |

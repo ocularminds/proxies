@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@abandonware/bleno": "^0.6.1",
+    "@stoprocent/bleno": "^0.13.1",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {

@@ -48,7 +48,7 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 
 ```
 server/   Validation API — Express, zod, pg, vitest
-host/     Desktop host — Electron, @abandonware/bleno (BLE peripheral)
+host/     Desktop host — Electron, @stoprocent/bleno (BLE peripheral)
 mobile/   Phone app — Capacitor + Vite (BLE central)
 shared/   Cross-component constants (BLE service/characteristic UUIDs)
 docs/     ROADMAP.md — living review, fix plan, and expansion plan
@@ -82,9 +82,9 @@ npm start              # compiles TypeScript, then launches the tray app
 Grant the app Bluetooth permission when prompted. Configuration via `host/.env`:
 `SERVER_URL` (default `http://localhost:3000`), `HOST_NAME` (advertised BLE name).
 
-BLE peripheral support in desktop Node is the known-weakest link (bleno is
-community-maintained); the roadmap moves the radio to dedicated gateway hardware
-in Phase 2.
+BLE peripheral support in desktop Node is the known-weakest link (we use
+`@stoprocent/bleno`, the actively maintained bleno fork); the roadmap moves the
+radio to dedicated gateway hardware in Phase 2.
 
 ### Mobile
 

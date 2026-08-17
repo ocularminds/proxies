@@ -1,44 +1,57 @@
-import bleno from '@abandonware/bleno';
+import bleno, {
+  Characteristic,
+  PrimaryService,
+  type ConnectionHandle,
+  type State,
+  type UpdateValueCallback,
+  type WriteRequestCallback,
+} from '@stoprocent/bleno';
 import config from './config';
 import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID } from './uuids';
 import type { HostEvent, ValidationResult } from './events';
 
 export type EventListener = (event: HostEvent) => void;
 
-// Notify characteristic: pushes the server's verdict back to the phone.
-class ResultCharacteristic extends bleno.Characteristic {
-  private updateValue: ((data: Buffer) => void) | null = null;
+// Notify characteristic: pushes the server's verdict back to subscribed phones.
+class ResultCharacteristic extends Characteristic {
+  private subscribers = new Map<ConnectionHandle, UpdateValueCallback>();
 
   constructor() {
     super({ uuid: RESULT_CHAR_UUID, properties: ['notify'] });
   }
 
-  override onSubscribe(_maxValueSize: number, updateValueCallback: (data: Buffer) => void) {
-    this.updateValue = updateValueCallback;
+  override onSubscribe(
+    handle: ConnectionHandle,
+    _maxValueSize: number,
+    updateValueCallback: UpdateValueCallback
+  ) {
+    this.subscribers.set(handle, updateValueCallback);
   }
 
-  override onUnsubscribe() {
-    this.updateValue = null;
+  override onUnsubscribe(handle: ConnectionHandle) {
+    this.subscribers.delete(handle);
   }
 
   push(payload: ValidationResult) {
-    if (this.updateValue) {
-      this.updateValue(Buffer.from(JSON.stringify(payload)));
+    const data = Buffer.from(JSON.stringify(payload));
+    for (const notify of this.subscribers.values()) {
+      notify(data);
     }
   }
 }
 
 // Write characteristic: the phone submits its proximity metrics as JSON.
-class MetricsCharacteristic extends bleno.Characteristic {
+class MetricsCharacteristic extends Characteristic {
   constructor(private readonly handleMetrics: (metrics: unknown) => void) {
     super({ uuid: METRICS_CHAR_UUID, properties: ['write', 'writeWithoutResponse'] });
   }
 
   override onWriteRequest(
+    _handle: ConnectionHandle,
     data: Buffer,
     offset: number,
     _withoutResponse: boolean,
-    callback: (result: number) => void
+    callback: WriteRequestCallback
   ) {
     if (offset) {
       return callback(this.RESULT_ATTR_NOT_LONG);
@@ -78,7 +91,7 @@ export function startBluetooth({ onEvent }: { onEvent: EventListener }) {
     onEvent({ type: 'validation-result', result });
   });
 
-  bleno.on('stateChange', (state: string) => {
+  bleno.on('stateChange', (state: State) => {
     onEvent({ type: 'state', state });
     if (state === 'poweredOn') {
       bleno.startAdvertising(config.hostName, [SERVICE_UUID]);
@@ -92,7 +105,7 @@ export function startBluetooth({ onEvent }: { onEvent: EventListener }) {
       return onEvent({ type: 'error', message: `Advertising failed: ${err.message}` });
     }
     bleno.setServices([
-      new bleno.PrimaryService({
+      new PrimaryService({
         uuid: SERVICE_UUID,
         characteristics: [metricsCharacteristic, resultCharacteristic],
       }),
