@@ -24,6 +24,10 @@ const config: AppConfig = {
   // terminate TLS at a reverse proxy and set TRUST_PROXY.
   tlsCertPath: process.env.TLS_CERT_PATH || null,
   tlsKeyPath: process.env.TLS_KEY_PATH || null,
+  // When set, the MQTT bridge subscribes to proxies/telemetry/+ on this broker.
+  mqttUrl: process.env.MQTT_URL || null,
+  mqttUsername: process.env.MQTT_USERNAME || undefined,
+  mqttPassword: process.env.MQTT_PASSWORD || undefined,
   // Gates the /admin endpoints; unset disables them entirely.
   adminToken: process.env.ADMIN_TOKEN || null,
   // Dev-only escape hatch: accept unsigned validation bodies when no database

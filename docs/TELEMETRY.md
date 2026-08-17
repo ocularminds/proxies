@@ -2,7 +2,15 @@
 
 The canonical shape every reading takes on its way into the platform,
 regardless of vertical (presence, soil moisture, bin fill, vibration bands,
-water level) or transport (HTTPS batch today; MQTT in P2.2/P2.3).
+water level) or transport. Two transports share one verification pipeline:
+
+- **HTTPS**: `POST /telemetry` with the batch as the JSON body.
+- **MQTT**: publish the same JSON to `proxies/telemetry/<deviceId>`; the
+  pipeline's verdict comes back on `proxies/telemetry-ack/<deviceId>`
+  (`{status, success, code?, accepted?, alertsFired?}`). The broker is
+  untrusted by design — the Ed25519 envelope and the monotonic `seq` carry
+  the trust, so broker hardening (TLS, per-device credentials, topic ACLs)
+  is deployment policy rather than a correctness requirement.
 
 ## Batch (transport envelope)
 

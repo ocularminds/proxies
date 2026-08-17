@@ -15,6 +15,9 @@ export interface AppConfig extends ValidationConfig {
   databaseUrl: string | null;
   tlsCertPath: string | null;
   tlsKeyPath: string | null;
+  mqttUrl: string | null;
+  mqttUsername?: string;
+  mqttPassword?: string;
   adminToken: string | null;
   allowUnsignedValidation: boolean;
   timestampToleranceMs: number;

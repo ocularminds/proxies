@@ -14,17 +14,27 @@ services:
       timeout: 5s
       retries: 10
 
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
   server:
     build: ../server
     environment:
       DATABASE_URL: postgres://postgres:proxies@db:5432/proxies
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+      MQTT_URL: mqtt://mqtt:1883
       PORT: "3000"
     ports:
       - "3000:3000"
     depends_on:
       db:
         condition: service_healthy
+      mqtt:
+        condition: service_started
 
   grafana:
     image: grafana/grafana:11.2.0
