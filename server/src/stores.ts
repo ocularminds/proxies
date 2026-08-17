@@ -70,12 +70,18 @@ export interface RuleRecord {
   op: 'gt' | 'lt';
   threshold: number;
   webhookUrl: string | null;
+  label: string | null;
 }
 
 export interface RuleStore {
   create(rule: Omit<RuleRecord, 'id'>): Promise<{ id: number }>;
   // Active rules matching the reading's scope (org, then site/device narrowing).
   matching(organizationId: number, siteId: number | null, deviceUuid: string, types: string[]): Promise<RuleRecord[]>;
+  // Rules already covering a site (site-scoped or org-wide), for exact-duplicate skips.
+  coveringSite(
+    organizationId: number,
+    siteId: number
+  ): Promise<{ metricType: string; op: string; threshold: number }[]>;
   createAlert(ruleId: number, deviceUuid: string, readingTs: string, value: number): Promise<{ id: number }>;
   markDelivered(alertId: number): Promise<void>;
   listAlerts(organizationId: number, limit: number): Promise<unknown[]>;
@@ -122,6 +128,7 @@ export interface HostStore {
 
 export interface SiteRecord {
   id: number;
+  organizationId: number;
   latitude: number | null;
   longitude: number | null;
   rssiFloorDbm: number;
@@ -436,7 +443,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
     },
     async getById(id) {
       const result = await pool.query(
-        `SELECT id, latitude, longitude, rssi_floor_dbm, wifi_floor_dbm, gps_max_meters, min_tier
+        `SELECT id, organization_id, latitude, longitude, rssi_floor_dbm, wifi_floor_dbm, gps_max_meters, min_tier
          FROM sites WHERE id = $1`,
         [id]
       );
@@ -444,6 +451,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
       return row
         ? {
             id: Number(row.id),
+            organizationId: Number(row.organization_id),
             latitude: row.latitude,
             longitude: row.longitude,
             rssiFloorDbm: Number(row.rssi_floor_dbm),
@@ -494,8 +502,8 @@ export function createStores(databaseUrl: string | null): Stores | null {
   const rules: RuleStore = {
     async create(rule) {
       const result = await pool.query(
-        `INSERT INTO rules (organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        `INSERT INTO rules (organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url, label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [
           rule.organizationId,
           rule.siteId,
@@ -504,13 +512,14 @@ export function createStores(databaseUrl: string | null): Stores | null {
           rule.op,
           rule.threshold,
           rule.webhookUrl,
+          rule.label,
         ]
       );
       return { id: Number(result.rows[0].id) };
     },
     async matching(organizationId, siteId, deviceUuid, types) {
       const result = await pool.query(
-        `SELECT id, organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url
+        `SELECT id, organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url, label
          FROM rules
          WHERE is_active
            AND organization_id = $1
@@ -528,6 +537,19 @@ export function createStores(databaseUrl: string | null): Stores | null {
         op: row.op,
         threshold: Number(row.threshold),
         webhookUrl: row.webhook_url,
+        label: row.label,
+      }));
+    },
+    async coveringSite(organizationId, siteId) {
+      const result = await pool.query(
+        `SELECT metric_type, op, threshold FROM rules
+         WHERE is_active AND organization_id = $1 AND (site_id IS NULL OR site_id = $2)`,
+        [organizationId, siteId]
+      );
+      return result.rows.map((row) => ({
+        metricType: row.metric_type,
+        op: row.op,
+        threshold: Number(row.threshold),
       }));
     },
     async createAlert(ruleId, deviceUuid, readingTs, value) {
@@ -544,7 +566,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
     async listAlerts(organizationId, limit) {
       const result = await pool.query(
         `SELECT a.id, a.rule_id, a.device_uuid, a.reading_ts, a.value, a.delivered, a.created_at,
-                r.metric_type, r.op, r.threshold, d.name AS device_name
+                r.metric_type, r.op, r.threshold, r.label, d.name AS device_name
          FROM alerts a
          JOIN rules r ON r.id = a.rule_id
          JOIN devices d ON d.id = a.device_uuid

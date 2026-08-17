@@ -1,12 +1,14 @@
 import express, { type Express, type Request, type RequestHandler, type Response } from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
+import { KITS, KIT_KEYS, type KitKey } from './kits';
 import {
   adminCreateDevice,
   adminCreateHost,
   adminCreateRule,
   adminCreateSite,
   adminCreateUser,
+  applyKitRequest,
   attestedValidation,
   enrollRequest,
   nonceRequest,
@@ -320,8 +322,65 @@ export function createApp({ config, stores, notifier = defaultNotifier }: AppDep
         op: parsed.data.op,
         threshold: parsed.data.threshold,
         webhookUrl: parsed.data.webhookUrl ?? null,
+        label: parsed.data.label ?? null,
       });
       res.status(201).json({ success: true, ruleId: rule.id });
+    })
+  );
+
+  // Vertical kits are data: metric catalogs, rule packs, field notes.
+  app.get('/kits', (_req, res) => {
+    res.json({
+      success: true,
+      kits: KIT_KEYS.map((key) => ({ key, title: KITS[key].title })),
+    });
+  });
+
+  app.get('/kits/:key', (req, res) => {
+    const kit = KITS[req.params.key as KitKey];
+    if (!kit) {
+      res.status(404).json({ success: false, message: 'No kit with that key.' });
+      return;
+    }
+    res.json({ success: true, kit });
+  });
+
+  // Applying a kit instantiates its default rules for the site (idempotent:
+  // metric+op pairs already covering the site are skipped).
+  app.post(
+    '/admin/sites/:siteId/apply-kit',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = applyKitRequest.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+      const siteId = Number(req.params.siteId);
+      const site = Number.isInteger(siteId) && siteId > 0 ? await db.sites.getById(siteId) : null;
+      if (!site) {
+        res.status(404).json({ success: false, message: 'No site with that id.' });
+        return;
+      }
+
+      const kit = KITS[parsed.data.kit];
+      const covered = await db.rules.coveringSite(site.organizationId, siteId);
+      const coveredKey = new Set(covered.map((c) => `${c.metricType}|${c.op}|${c.threshold}`));
+      let created = 0;
+      for (const rule of kit.defaultRules) {
+        if (coveredKey.has(`${rule.metricType}|${rule.op}|${rule.threshold}`)) continue;
+        await db.rules.create({
+          organizationId: site.organizationId,
+          siteId,
+          deviceUuid: null,
+          metricType: rule.metricType,
+          op: rule.op,
+          threshold: rule.threshold,
+          webhookUrl: null,
+          label: rule.label,
+        });
+        created += 1;
+      }
+      res.json({ success: true, kit: kit.key, rulesCreated: created, rulesSkipped: kit.defaultRules.length - created });
     })
   );
 

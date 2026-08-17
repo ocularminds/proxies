@@ -712,6 +712,49 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     expect(scopedRun.body.alertsFired).toBe(0);
   });
 
+  test('vertical kits list, detail, and apply idempotently to a site', async () => {
+    const list = await request(app).get('/kits');
+    expect(list.status).toBe(200);
+    expect(list.body.kits.length).toBe(4);
+
+    const detail = await request(app).get('/kits/waste');
+    expect(detail.status).toBe(200);
+    expect(detail.body.kit.defaultRules.length).toBeGreaterThan(0);
+
+    const missing = await request(app).get('/kits/mining');
+    expect(missing.status).toBe(404);
+
+    const applied = await request(app)
+      .post(`/admin/sites/${siteId}/apply-kit`)
+      .set(admin)
+      .send({ kit: 'waste' });
+    expect(applied.status).toBe(200);
+    expect(applied.body.rulesCreated).toBe(3);
+
+    const reapplied = await request(app)
+      .post(`/admin/sites/${siteId}/apply-kit`)
+      .set(admin)
+      .send({ kit: 'waste' });
+    expect(reapplied.body.rulesCreated).toBe(0);
+    expect(reapplied.body.rulesSkipped).toBe(3);
+
+    const badSite = await request(app)
+      .post('/admin/sites/999999/apply-kit')
+      .set(admin)
+      .send({ kit: 'waste' });
+    expect(badSite.status).toBe(404);
+
+    // A kit rule fires with its label attached to the alert listing.
+    const now = new Date().toISOString();
+    const res = await request(app)
+      .post('/telemetry')
+      .send(telemetryBody(sensorId, sensorKeys.privateKey, 20, [{ ts: now, type: 'fill_pct', value: 91, unit: '%' }]));
+    expect(res.status).toBe(200);
+    expect(res.body.alertsFired).toBe(1);
+    const alerts = await request(app).get('/admin/alerts?organization=Acme').set(admin);
+    expect(alerts.body.alerts[0].label).toBe('Bin needs collection');
+  });
+
   test('fleet health lists devices and hosts with battery and staleness', async () => {
     const res = await request(app).get('/admin/fleet?organization=Acme').set(admin);
     expect(res.status).toBe(200);
