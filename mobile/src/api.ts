@@ -10,6 +10,7 @@ import type { ProximityMetrics } from './metrics';
 export interface ValidationEnvelope {
   deviceId: string;
   nonce: string;
+  lanToken?: string;
   signature: string;
   metrics: ProximityMetrics;
 }
@@ -71,7 +72,10 @@ async function requestNonce(serverUrl: string, deviceId: string): Promise<string
   return body.nonce;
 }
 
-export async function buildSignedEnvelope(metrics: ProximityMetrics): Promise<ValidationEnvelope> {
+export async function buildSignedEnvelope(
+  metrics: ProximityMetrics,
+  lanToken: string | null
+): Promise<ValidationEnvelope> {
   const deviceId = await getDeviceId();
   if (!deviceId) {
     throw new Error('This device is not enrolled yet — open Enrollment and register it first.');
@@ -81,7 +85,13 @@ export async function buildSignedEnvelope(metrics: ProximityMetrics): Promise<Va
     throw new Error('Server URL is not set — configure it under Enrollment.');
   }
   const nonce = await requestNonce(serverUrl, deviceId);
-  const message = `proxies-validate\n${deviceId}\n${nonce}\n${canonicalJson(metrics)}`;
+  // The 'null' literal fills the LAN-token slot when no proof was collected —
+  // mirror of the server's validationSigningString.
+  const message = `proxies-validate\n${deviceId}\n${nonce}\n${lanToken ?? 'null'}\n${canonicalJson(metrics)}`;
   const signature = await signMessage(message);
-  return { deviceId, nonce, signature, metrics };
+  const envelope: ValidationEnvelope = { deviceId, nonce, signature, metrics };
+  if (lanToken !== null) {
+    envelope.lanToken = lanToken;
+  }
+  return envelope;
 }

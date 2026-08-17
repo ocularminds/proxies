@@ -1,5 +1,5 @@
 import { BleClient, dataViewToText, textToDataView } from '@capacitor-community/bluetooth-le';
-import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID } from './uuids';
+import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID, LAN_INFO_CHAR_UUID } from './uuids';
 import { collectProximityMetrics } from './metrics';
 import { buildSignedEnvelope } from './api';
 
@@ -11,6 +11,32 @@ export interface ValidationResult {
 export type StatusListener = (message: string) => void;
 
 const VERDICT_TIMEOUT_MS = 8000;
+const LAN_FETCH_TIMEOUT_MS = 3000;
+
+// Same-network proof: the host publishes its LAN listener over BLE; being able
+// to fetch a token from it demonstrates we share the host's network. Absence
+// is reported, not fatal — the server scores it.
+async function fetchLanToken(
+  bleDeviceId: string,
+  onStatus: StatusListener
+): Promise<string | null> {
+  try {
+    const info = await BleClient.read(bleDeviceId, SERVICE_UUID, LAN_INFO_CHAR_UUID);
+    const { url } = JSON.parse(dataViewToText(info)) as { url: string | null };
+    if (!url) {
+      return null;
+    }
+    onStatus('Proving same-network via the host LAN…');
+    const response = await fetch(`${url}/lan-token`, {
+      signal: AbortSignal.timeout(LAN_FETCH_TIMEOUT_MS),
+    });
+    const body = (await response.json()) as { token?: string };
+    return body.token ?? null;
+  } catch {
+    onStatus('Same-network proof unavailable; continuing without it.');
+    return null;
+  }
+}
 
 export async function runValidation(onStatus: StatusListener): Promise<ValidationResult> {
   await BleClient.initialize();
@@ -22,7 +48,8 @@ export async function runValidation(onStatus: StatusListener): Promise<Validatio
   try {
     onStatus(`Connected to ${device.name ?? 'host'}. Collecting metrics…`);
     const metrics = await collectProximityMetrics(device.deviceId);
-    const envelope = await buildSignedEnvelope(metrics);
+    const lanToken = await fetchLanToken(device.deviceId, onStatus);
+    const envelope = await buildSignedEnvelope(metrics, lanToken);
 
     let resolveVerdict: (result: ValidationResult) => void;
     const verdict = new Promise<ValidationResult>((resolve) => {

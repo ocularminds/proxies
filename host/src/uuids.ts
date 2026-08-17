@@ -5,6 +5,7 @@ interface SharedUuids {
   serviceUuid: string;
   metricsCharacteristicUuid: string;
   resultCharacteristicUuid: string;
+  lanInfoCharacteristicUuid: string;
 }
 
 const uuids = JSON.parse(
@@ -17,3 +18,4 @@ const strip = (uuid: string): string => uuid.replace(/-/g, '');
 export const SERVICE_UUID = strip(uuids.serviceUuid);
 export const METRICS_CHAR_UUID = strip(uuids.metricsCharacteristicUuid);
 export const RESULT_CHAR_UUID = strip(uuids.resultCharacteristicUuid);
+export const LAN_INFO_CHAR_UUID = strip(uuids.lanInfoCharacteristicUuid);

@@ -67,13 +67,21 @@ export function canonicalJson(value: unknown): string {
 }
 
 // The string a device signs for a validation request. The nonce is single-use
-// and short-lived, so it carries the freshness guarantee.
+// and short-lived, so it carries the freshness guarantee; the LAN token slot
+// is the literal 'null' when no same-network proof was collected.
 export function validationSigningString(
   deviceId: string,
   nonce: string,
+  lanToken: string | null,
   metrics: unknown
 ): string {
-  return `proxies-validate\n${deviceId}\n${nonce}\n${canonicalJson(metrics)}`;
+  return `proxies-validate\n${deviceId}\n${nonce}\n${lanToken ?? 'null'}\n${canonicalJson(metrics)}`;
+}
+
+// The string a host signs inside the LAN token it serves on its LAN-only
+// listener; possession proves the fetcher shared the host's network.
+export function lanTokenSigningString(hostId: string, issuedAt: string): string {
+  return `proxies-lan\n${hostId}\n${issuedAt}`;
 }
 
 // The string a device signs to request a nonce; the timestamp window guards

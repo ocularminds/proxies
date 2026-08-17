@@ -29,6 +29,8 @@ const config: AppConfig = {
   timestampToleranceMs: num(process.env.TIMESTAMP_TOLERANCE_MS, 300_000),
   // Validity window of an issued single-use validation nonce.
   nonceTtlMs: num(process.env.NONCE_TTL_MS, 120_000),
+  // Max age of a host-served LAN token (same-network proof).
+  lanTokenTtlMs: num(process.env.LAN_TOKEN_TTL_MS, 120_000),
   // Set true only when deployed behind a reverse proxy, so rate limits see
   // real client addresses.
   trustProxy: process.env.TRUST_PROXY === 'true',

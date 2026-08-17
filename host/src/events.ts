@@ -11,5 +11,6 @@ export type HostEvent =
   | { type: 'disconnected'; clientAddress: string }
   | { type: 'metrics-received'; metrics: unknown }
   | { type: 'rssi-measured'; rssi: number | null }
+  | { type: 'lan'; url: string }
   | { type: 'validation-result'; result: ValidationResult }
   | { type: 'error'; message: string };
