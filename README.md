@@ -41,6 +41,7 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | Device enrollment: per-device Ed25519 keys, one-time codes, signed requests | Implemented (P1.2) |
 | Host attestation: envelopes must cross an enrolled host's radio; host-measured RSSI is authoritative when present | Implemented (P1.4) |
 | Same-network proof: host-signed token served on its LAN-only listener | Implemented (P1.7) |
+| QR scanning gated on validation: single-use session QR on the host, redeemed once | Implemented (P1.8) |
 | Wi-Fi / GPS as advisory fallback signals | Collected when available; assurance tiers in Phase 1 |
 | Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
 | Same-network proof (LAN-served token) | Phase 1 |
@@ -122,6 +123,14 @@ die on first use; an invalid LAN token is a hard failure while an absent one
 is recorded and scored by policy. Unsigned requests are rejected (dev-only
 escape hatch: `ALLOW_UNSIGNED_VALIDATION=true` with no database).
 
+On approval the server mints a **single-use QR session** (2 min TTL); the host
+displays it, and the organization's scanning system redeems it exactly once:
+
+```bash
+curl -s -X POST localhost:3000/sessions/redeem -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"sessionId":"<uuid from the QR>"}'
+```
+
 ### Host (desktop)
 
 ```bash
@@ -167,6 +176,7 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age on nonce requests |
 | `NONCE_TTL_MS` | `120000` | Validity window of a single-use validation nonce |
 | `LAN_TOKEN_TTL_MS` | `120000` | Max age of a host-served same-network token |
+| `SESSION_TTL_MS` | `120000` | Lifetime of a minted QR session before redemption |
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `900000` / `300` | Per-IP request budget |
 | `RATE_LIMIT_ENROLL_MAX` | `10` | Stricter per-IP budget on the enroll endpoints |
 | `TRUST_PROXY` | `false` | Set behind a reverse proxy so limits see real client IPs |

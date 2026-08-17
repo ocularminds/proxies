@@ -51,6 +51,21 @@ export interface SiteStore {
   ): Promise<{ id: number } | null>;
 }
 
+export interface RedeemedSession {
+  deviceUuid: string;
+  hostId: string;
+  siteId: number;
+  userEmail: string;
+  createdAt: Date;
+}
+
+export interface SessionStore {
+  create(deviceUuid: string, hostId: string, siteId: number, expiresAt: Date): Promise<{ id: string }>;
+  // Atomically redeems; null when unknown, expired, or already redeemed.
+  redeem(id: string): Promise<RedeemedSession | null>;
+  deleteExpired(olderThanMs: number): Promise<void>;
+}
+
 export interface NonceStore {
   issue(deviceUuid: string, nonceHash: string, expiresAt: Date): Promise<void>;
   // Atomically marks the nonce used; false when unknown, expired, already
@@ -66,6 +81,7 @@ export interface Stores {
   nonces: NonceStore;
   hosts: HostStore;
   sites: SiteStore;
+  sessions: SessionStore;
   close(): Promise<void>;
 }
 
@@ -252,6 +268,42 @@ export function createStores(databaseUrl: string | null): Stores | null {
     },
   };
 
+  const sessions: SessionStore = {
+    async create(deviceUuid, hostId, siteId, expiresAt) {
+      const result = await pool.query(
+        `INSERT INTO sessions (device_uuid, host_id, site_id, expires_at)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [deviceUuid, hostId, siteId, expiresAt]
+      );
+      return { id: result.rows[0].id };
+    },
+    async redeem(id) {
+      const result = await pool.query(
+        `UPDATE sessions s SET redeemed_at = now()
+         FROM devices d, users u
+         WHERE s.id = $1 AND s.redeemed_at IS NULL AND s.expires_at > now()
+           AND d.id = s.device_uuid AND u.id = d.user_id
+         RETURNING s.device_uuid, s.host_id, s.site_id, s.created_at, u.email`,
+        [id]
+      );
+      const row = result.rows[0];
+      return row
+        ? {
+            deviceUuid: row.device_uuid,
+            hostId: row.host_id,
+            siteId: Number(row.site_id),
+            userEmail: row.email,
+            createdAt: row.created_at,
+          }
+        : null;
+    },
+    async deleteExpired(olderThanMs) {
+      await pool.query(`DELETE FROM sessions WHERE expires_at < now() - ($1 * interval '1 ms')`, [
+        olderThanMs,
+      ]);
+    },
+  };
+
   return {
     logs,
     devices,
@@ -259,6 +311,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
     nonces,
     hosts,
     sites,
+    sessions,
     async close() {
       await pool.end();
     },

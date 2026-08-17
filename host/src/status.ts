@@ -18,6 +18,8 @@ interface StatusEventPayload {
   hostId?: string | null;
   rssi?: number | null;
   url?: string;
+  dataUrl?: string;
+  expiresInMs?: number;
 }
 
 interface Window {
@@ -26,6 +28,9 @@ interface Window {
 
 const infoEl = document.getElementById('info') as HTMLDivElement;
 const eventsEl = document.getElementById('events') as HTMLUListElement;
+const qrBoxEl = document.getElementById('qr-box') as HTMLDivElement;
+const qrEl = document.getElementById('qr') as HTMLImageElement;
+let qrTimer: number | undefined;
 
 function describe(payload: StatusEventPayload): string {
   switch (payload.type) {
@@ -45,6 +50,8 @@ function describe(payload: StatusEventPayload): string {
         : `Host-measured RSSI ${payload.rssi} dBm (windowed median)`;
     case 'lan':
       return `Serving same-network tokens at ${payload.url}`;
+    case 'session':
+      return `QR session displayed (valid ${Math.round((payload.expiresInMs ?? 0) / 1000)}s)`;
     case 'validation-result':
       return payload.result?.message ?? 'Validation result';
     case 'error':
@@ -55,6 +62,15 @@ function describe(payload: StatusEventPayload): string {
 }
 
 (window as unknown as Window).proxies.onEvent((payload) => {
+  if (payload.type === 'session' && payload.dataUrl) {
+    qrEl.src = payload.dataUrl;
+    qrBoxEl.hidden = false;
+    window.clearTimeout(qrTimer);
+    qrTimer = window.setTimeout(() => {
+      qrBoxEl.hidden = true;
+      qrEl.removeAttribute('src');
+    }, payload.expiresInMs ?? 120000);
+  }
   if (payload.type === 'host-info') {
     const enrollment = payload.hostId ? `host ${payload.hostId}` : 'NOT ENROLLED';
     infoEl.textContent = `LAN ${payload.hostAddress} → server ${payload.serverUrl} · ${enrollment}`;

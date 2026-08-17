@@ -9,6 +9,7 @@ import {
   attestedValidation,
   enrollRequest,
   nonceRequest,
+  redeemRequest,
   unsignedValidation,
 } from './schema';
 import { evaluateProximity } from './evaluate';
@@ -269,6 +270,30 @@ export function createApp({ config, stores }: AppDeps): Express {
     })
   );
 
+  // The org's scanning system redeems a displayed QR session exactly once.
+  app.post(
+    '/sessions/redeem',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = redeemRequest.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+
+      const redeemed = await db.sessions.redeem(parsed.data.sessionId);
+      if (!redeemed) {
+        res
+          .status(400)
+          .json({ success: false, message: 'Unknown, expired, or already-redeemed session.' });
+        return;
+      }
+      db.sessions
+        .deleteExpired(60 * 60 * 1000)
+        .catch((err: Error) => console.error('Session cleanup failed:', err.message));
+      res.json({ success: true, ...redeemed });
+    })
+  );
+
   app.post(
     '/nonces',
     wrap(async (req, res) => {
@@ -453,7 +478,21 @@ export function createApp({ config, stores }: AppDeps): Express {
       if (denial) return deny(403, denial, device.id);
 
       await record(true, null, device.id);
-      res.json({ success: true, message: 'Proximity validation successful.' });
+
+      // Mint the single-use QR session the host will display.
+      let session: { id: string; expiresInMs: number } | null = null;
+      try {
+        const created = await stores.sessions.create(
+          device.id,
+          host.id,
+          host.siteId,
+          new Date(Date.now() + config.sessionTtlMs)
+        );
+        session = { id: created.id, expiresInMs: config.sessionTtlMs };
+      } catch (err) {
+        console.error('Failed to mint session:', (err as Error).message);
+      }
+      res.json({ success: true, message: 'Proximity validation successful.', session });
     })
   );
 

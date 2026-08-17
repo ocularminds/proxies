@@ -4,6 +4,7 @@ import config from './config';
 import { initTray } from './tray';
 import { startBluetooth } from './bluetooth';
 import { getHostAddress } from './network';
+import QRCode from 'qrcode';
 import { enrollHost, loadIdentity, type HostIdentity } from './identity';
 import { startLanServer, type LanServer } from './lanServer';
 import type { HostEvent } from './events';
@@ -87,8 +88,23 @@ app.whenReady().then(async () => {
     }
   }
 
+  // On an approved validation, render the session as a QR for scanning.
+  const forwardEvent = (event: HostEvent) => {
+    sendEvent(event);
+    if (event.type === 'validation-result' && event.result.success && event.result.session) {
+      const session = event.result.session;
+      QRCode.toDataURL(session.id, { margin: 1, width: 240 })
+        .then((dataUrl) =>
+          sendEvent({ type: 'session', dataUrl, expiresInMs: session.expiresInMs })
+        )
+        .catch((err: Error) =>
+          sendEvent({ type: 'error', message: `QR render failed: ${err.message}` })
+        );
+    }
+  };
+
   startBluetooth({
-    onEvent: sendEvent,
+    onEvent: forwardEvent,
     getIdentity: () => identity,
     getLanUrl: () => lanServer?.url ?? null,
   });

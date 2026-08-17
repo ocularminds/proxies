@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:">
   <title>Proxies host status</title>
   <style>
     body {
@@ -25,6 +25,10 @@
 <body>
   <h1>Proxies host</h1>
   <div id="info">Starting…</div>
+  <div id="qr-box" hidden>
+    <h2>Scan to proceed</h2>
+    <img id="qr" alt="QR session code" width="240" height="240">
+  </div>
   <h2>Events</h2>
   <ul id="events"></ul>
   <script src="status.js"></script>

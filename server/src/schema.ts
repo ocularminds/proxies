@@ -86,6 +86,12 @@ export const adminCreateDevice = z
   })
   .strict();
 
+export const redeemRequest = z
+  .object({
+    sessionId: z.string().uuid(),
+  })
+  .strict();
+
 export const adminCreateSite = z
   .object({
     organizationName: z.string().min(1).max(255),
