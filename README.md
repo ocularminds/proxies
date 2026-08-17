@@ -160,6 +160,9 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `ALLOW_UNSIGNED_VALIDATION` | `false` | Dev-only: unsigned validation when no DB is configured |
 | `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age on nonce requests |
 | `NONCE_TTL_MS` | `120000` | Validity window of a single-use validation nonce |
+| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `900000` / `300` | Per-IP request budget |
+| `RATE_LIMIT_ENROLL_MAX` | `10` | Stricter per-IP budget on the enroll endpoints |
+| `TRUST_PROXY` | `false` | Set behind a reverse proxy so limits see real client IPs |
 
 ## Security model — read this
 

@@ -67,7 +67,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | P1 | Unfiltered always-on BLE scan | High | ✅ P0 (host advertises; no scanning at all) |
 | P2 | Outbound fetch with no timeout | High | ✅ P0 (probe removed; host→server 3 s timeout) |
 | P3 | Single-sample RSSI noise → flaky verdicts | Med | ✅ P1.5 — host samples every 500 ms, attests the median of the last 10; hysteresis/calibration tuning with real hardware (M1) |
-| P4 | No rate limiting | Med | ⬜ P1.10 (10 kb body limit done) |
+| P4 | No rate limiting | Med | ✅ P1.10 — per-IP budgets (global + stricter enroll), helmet, 10 kb body limit |
 | P5 | Cold GPS fix per validation | Low | ◐ timeout + `maximumAge` set (P0) |
 | P6 | No persistence/queue/scale story | Low | ⬜ Phase 2 |
 
@@ -108,7 +108,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 | P1.7 | Same-network proof: short-lived token served only on the host's LAN interface; phone fetches and returns it | contract |
 | P1.8 | QR gate: signed short-lived session token bound to device + nonce; host unlock UI | contract, G7 |
 | P1.9 | TLS on all HTTP; app-layer AES-GCM over BLE under enrolled keys; reject un-enrolled peers | S6, S7 |
-| P1.10 | Rate limiting + helmet | P4 |
+| P1.10 ✅ | Rate limiting (per-IP global budget + stricter enroll budget, RFC draft-7 headers, `TRUST_PROXY` switch) + helmet | P4 |
 | P1.11 | Assurance tiers (A: BLE challenge–response · B: LAN token + attested GPS · C: deny) + error taxonomy, logged per decision | S1 class, contract |
 | P1.12 | GPS attestation via Play Integrity / DeviceCheck (only if GPS stays load-bearing) | S2 residual |
 
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | P1.10 shipped: helmet security headers plus per-IP rate limits — a global request budget and a stricter one on the code-burning enroll endpoints; `TRUST_PROXY` documented for reverse-proxy deployments. |
 | 2026-08-17 | P1.5 shipped: the host now measures. While a central is connected the host samples connection RSSI every 500 ms (`updateRssiAsync`) and attests the median of the last 10 readings; radios that don't report RSSI degrade to a null attestation (phone value stays advisory). With P1.4's authority rule this completes the S2 inversion in code — remaining: calibration and hysteresis tuning against real hardware at M1. |
 | 2026-08-17 | P1.4 shipped: host attestation. Sites and hosts get admin bootstrap + one-time-code enrollment (host identity persisted in Electron userData, private key on-machine). `/validate-proximity` now only accepts `{envelope, attestation}` where the enrolled host counter-signs `hostId + timestamp + rssi + sha256(envelope)` — an envelope that never crossed an enrolled host's radio is dead on arrival, and the phone can no longer reach the server alone. Audit rows now carry `host_id` and `site_id`. Server treats host-measured RSSI as authoritative over the phone's claim (sampling lands in P1.5 — `@stoprocent/bleno` exposes `updateRssiAsync`). |
 | 2026-08-17 | P1.3 shipped: single-use nonces close S5. `/nonces` issues device-bound nonces against a signed request (timestamp-windowed); validation envelopes carry the nonce instead of a timestamp; the server claims the nonce atomically **before** signature verification, so replays and parallel spends fail; expired nonces are swept opportunistically. Next: P1.4 moves nonce delivery onto the BLE link as the proximity proof, with host-side signing. |
