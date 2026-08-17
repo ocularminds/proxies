@@ -123,10 +123,10 @@ multi-tenant from day one. Target: ~6–10 weeks to pilot-ready.
 
 | PR | Feature |
 | --- | --- |
-| P2.1 | Canonical telemetry envelope `{tenant, site, device_id, ts, type, value, unit, seq, battery, fw, sig}` + shared types package |
+| P2.1 ✅ | Canonical telemetry envelope specified ([docs/TELEMETRY.md](TELEMETRY.md)): signed batches, monotonic `seq`, snake_case typed readings; shared-package extraction lands with the gateway (P2.7), its first second consumer |
 | P2.2 | MQTT broker (Mosquitto → EMQX at scale) with mutual TLS; per-device certs reuse P1.2 enrollment |
 | P2.3 | Ingest service: MQTT → TimescaleDB |
-| P2.4 | TimescaleDB migration: hypertables, continuous aggregates, retention/downsampling |
+| P2.4 ◐ | `telemetry` table (org/site/device attribution, typed readings) as a Timescale hypertable when the extension exists, plain Postgres otherwise — CI runs the Timescale image, local dev the fallback; devices generalized to phone/sensor/gateway kinds. Retention + continuous aggregates deferred until real volumes exist |
 | P2.5 | Rules engine (threshold + rate-of-change, per tenant) + alert delivery (SMS / WhatsApp / email) |
 | P2.6 | Device registry & fleet health (last-seen, battery, firmware) |
 | P2.7 | Gateway agent v1 on ESP32/Pi-class hardware: BLE + store-and-forward buffering, NTP, signed config — retires desktop-Node BLE (bleno) |
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | Phase 2 opened — P2.1/P2.4 foundation: canonical telemetry envelope documented (docs/TELEMETRY.md), `telemetry` storage with org/site/device attribution (hypertable on Timescale, plain-PG fallback — both paths CI/dev tested), and the schema pivot that makes devices generic endpoints: phones stay user-bound, sensors/gateways are site-bound (`kind`, `site_id`, `last_telemetry_seq`). |
 | 2026-08-17 | P1.9 partially shipped: the server can serve HTTPS directly (`TLS_CERT_PATH`/`TLS_KEY_PATH`, e.g. mkcert in dev) or sit behind a terminating proxy with `TRUST_PROXY`. The BLE-payload-crypto half (app-layer AEAD + peer gating) deliberately waits for P2.7's gateway, which replaces the desktop BLE surface it would harden — building it twice serves nobody. |
 | 2026-08-17 | P1.11 shipped: assurance tiers + per-site policy + error taxonomy. Each validation earns a tier — A (host-measured radio), B (same-network proof), C (relay-only) — checked against the site's `min_tier`; per-site thresholds and coordinates now override env config (S11 closed); every denial carries a structured code (HOST_*, LAN_TOKEN_*, DEVICE_*, NONCE_INVALID, SIGNATURE_INVALID, TIER_BELOW_POLICY, RSSI/WIFI/GPS codes) logged in `error_code` with the achieved tier in `assurance_tier`. |
 | 2026-08-17 | P1.8 shipped: the QR gate the product was named for. A successful validation mints a DB-backed, single-use session (2 min TTL, bound to device/host/site); the host generates the QR in the main process and the status window displays it until expiry; `/sessions/redeem` (admin-token gated, for the org's scanning system) claims it atomically — replays and expired sessions answer 400 — returning user email, device, and site for the consuming system. |

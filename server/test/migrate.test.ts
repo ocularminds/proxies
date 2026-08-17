@@ -16,6 +16,7 @@ const EXPECTED_TABLES = [
   'devices',
   'hosts',
   'validation_logs',
+  'telemetry',
   'schema_migrations',
 ];
 

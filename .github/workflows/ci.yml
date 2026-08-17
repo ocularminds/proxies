@@ -13,7 +13,9 @@ jobs:
         working-directory: server
     services:
       postgres:
-        image: postgres:16
+        # Timescale-enabled Postgres so migrations exercise the hypertable
+        # path; plain Postgres is the tested fallback (local dev).
+        image: timescale/timescaledb:latest-pg16
         env:
           POSTGRES_PASSWORD: postgres
         ports:
