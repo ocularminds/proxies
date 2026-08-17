@@ -3,7 +3,7 @@ import request from 'supertest';
 import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import { Pool } from 'pg';
 import type { Express } from 'express';
-import { createApp, type AppRuntimeConfig } from '../src/app';
+import { createApp, type AlertNotification, type AppRuntimeConfig } from '../src/app';
 import { createStores, type Stores } from '../src/stores';
 import { migrate } from '../src/migrate';
 import {
@@ -630,6 +630,77 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
       );
     expect(future.status).toBe(400);
     expect(future.body.code).toBe('READING_TS_FUTURE');
+  });
+
+  test('threshold rules fire alerts with delivery, scoping, and per-batch dedupe', async () => {
+    const delivered: AlertNotification[] = [];
+    const notifyingApp = createApp({
+      config: runtimeConfig(),
+      stores,
+      notifier: async (notification) => {
+        delivered.push(notification);
+      },
+    });
+
+    const rule = await request(app)
+      .post('/admin/rules')
+      .set(admin)
+      .send({ organizationName: 'Acme', metricType: 'temp_c', op: 'gt', threshold: 30 });
+    expect(rule.status).toBe(201);
+
+    // Two breaching readings in one batch → one alert (per-rule dedupe).
+    const now = new Date().toISOString();
+    const res = await request(notifyingApp)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 10, [
+          { ts: now, type: 'temp_c', value: 35.5 },
+          { ts: now, type: 'temp_c', value: 41.0 },
+          { ts: now, type: 'soil_moisture_pct', value: 30 },
+        ])
+      );
+    expect(res.status).toBe(200);
+    expect(res.body.alertsFired).toBe(1);
+    expect(delivered.length).toBe(1);
+    expect(delivered[0].value).toBe(35.5);
+    expect(delivered[0].rule.metricType).toBe('temp_c');
+
+    // Non-breaching batch fires nothing.
+    const calm = await request(notifyingApp)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 11, [
+          { ts: new Date().toISOString(), type: 'temp_c', value: 22 },
+        ])
+      );
+    expect(calm.body.alertsFired).toBe(0);
+
+    // Delivered alert is recorded and listable.
+    const alerts = await request(app).get('/admin/alerts?organization=Acme').set(admin);
+    expect(alerts.status).toBe(200);
+    expect(alerts.body.alerts.length).toBeGreaterThan(0);
+    expect(alerts.body.alerts[0].delivered).toBe(true);
+
+    // A rule scoped to a different device never fires for this sensor.
+    const otherScoped = await request(app)
+      .post('/admin/rules')
+      .set(admin)
+      .send({
+        organizationName: 'Acme',
+        deviceId,
+        metricType: 'soil_moisture_pct',
+        op: 'lt',
+        threshold: 50,
+      });
+    expect(otherScoped.status).toBe(201);
+    const scopedRun = await request(notifyingApp)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 12, [
+          { ts: new Date().toISOString(), type: 'soil_moisture_pct', value: 10 },
+        ])
+      );
+    expect(scopedRun.body.alertsFired).toBe(0);
   });
 
   test('a revoked device is refused', async () => {
