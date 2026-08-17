@@ -54,7 +54,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | G9 | README described a fictional repo; MIT vs Apache-2.0 conflict | — | ✅ P0 (Apache-2.0 everywhere) |
 | G10 | `geolib` used but never declared (found during fix) | — | ✅ P0 (inline haversine) |
 | S1 | Every check skippable by omission | Crit | ✅ P0 (zod strict; required signals) |
-| S2 | Phone attests its own proximity | Crit | ◐ P1.4 — an enrolled host must vouch for every envelope, and host-measured RSSI overrides the phone's claim when present; radio sampling: P1.5 |
+| S2 | Phone attests its own proximity | Crit | ✅ P1.4 + P1.5 — enrolled host vouches for every envelope and attests its own windowed-median RSSI, which overrides the phone's claim; calibration + hardware verification = M1 |
 | S3 | No users, devices, auth, or identity | Crit | ✅ P1.2 — Ed25519 device enrollment enforced on validation; interactive user auth deferred until a dashboard exists |
 | S4 | SSRF via client-supplied `hostAddress` | High | ✅ P0 (probe removed) · registry: P1.6 |
 | S5 | No replay protection or freshness | High | ✅ P1.3 — server-issued, device-bound, single-use nonces (2 min TTL, atomic claim); timestamp window guards nonce issuance |
@@ -66,7 +66,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | S11 | Config and site coordinates hardcoded | Low | ◐ env-based (P0); sites table with per-site thresholds landed (P1.1); request wiring: P1.11 |
 | P1 | Unfiltered always-on BLE scan | High | ✅ P0 (host advertises; no scanning at all) |
 | P2 | Outbound fetch with no timeout | High | ✅ P0 (probe removed; host→server 3 s timeout) |
-| P3 | Single-sample RSSI noise → flaky verdicts | Med | ⬜ P1.5 |
+| P3 | Single-sample RSSI noise → flaky verdicts | Med | ✅ P1.5 — host samples every 500 ms, attests the median of the last 10; hysteresis/calibration tuning with real hardware (M1) |
 | P4 | No rate limiting | Med | ⬜ P1.10 (10 kb body limit done) |
 | P5 | Cold GPS fix per validation | Low | ◐ timeout + `maximumAge` set (P0) |
 | P6 | No persistence/queue/scale story | Low | ⬜ Phase 2 |
@@ -103,7 +103,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 | P1.2 ✅ | Device enrollment: per-device Ed25519 keypair (non-extractable, WebCrypto/IndexedDB), bound to a user via one-time 24 h enrollment codes; validation requests become signed envelopes relayed over BLE; admin bootstrap endpoints; unsigned requests rejected by default | S3, S5 ◐ |
 | P1.3 ✅ | Server-issued single-use nonces: signed `/nonces` requests, device-bound hashes, 2 min TTL, claim-before-verify (replays lose the atomic race); envelope timestamp retired | S5 |
 | P1.4 ✅ | Host attestation: sites + hosts enroll (one-time codes, Ed25519); every validation must arrive as `{envelope, attestation}` — the host counter-signs the envelope hash + its measured RSSI; audit rows gain host + site; host-measured RSSI authoritative server-side | S2 ◐ |
-| P1.5 | Host-measured RSSI: windowed median over 5–10 samples, TX-power calibration, hysteresis at the floor | S2, P3 |
+| P1.5 ✅ | Host-measured RSSI: sampled every 500 ms per connection via `updateRssiAsync`, median of last 10 attested; graceful null on radios that don't report RSSI; TX-power calibration + hysteresis deferred to hardware tuning (M1) | S2, P3 |
 | P1.6 | Host↔server persistent WebSocket registry (liveness without inbound probes) | S4 class |
 | P1.7 | Same-network proof: short-lived token served only on the host's LAN interface; phone fetches and returns it | contract |
 | P1.8 | QR gate: signed short-lived session token bound to device + nonce; host unlock UI | contract, G7 |
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | P1.5 shipped: the host now measures. While a central is connected the host samples connection RSSI every 500 ms (`updateRssiAsync`) and attests the median of the last 10 readings; radios that don't report RSSI degrade to a null attestation (phone value stays advisory). With P1.4's authority rule this completes the S2 inversion in code — remaining: calibration and hysteresis tuning against real hardware at M1. |
 | 2026-08-17 | P1.4 shipped: host attestation. Sites and hosts get admin bootstrap + one-time-code enrollment (host identity persisted in Electron userData, private key on-machine). `/validate-proximity` now only accepts `{envelope, attestation}` where the enrolled host counter-signs `hostId + timestamp + rssi + sha256(envelope)` — an envelope that never crossed an enrolled host's radio is dead on arrival, and the phone can no longer reach the server alone. Audit rows now carry `host_id` and `site_id`. Server treats host-measured RSSI as authoritative over the phone's claim (sampling lands in P1.5 — `@stoprocent/bleno` exposes `updateRssiAsync`). |
 | 2026-08-17 | P1.3 shipped: single-use nonces close S5. `/nonces` issues device-bound nonces against a signed request (timestamp-windowed); validation envelopes carry the nonce instead of a timestamp; the server claims the nonce atomically **before** signature verification, so replays and parallel spends fail; expired nonces are swept opportunistically. Next: P1.4 moves nonce delivery onto the BLE link as the proximity proof, with host-side signing. |
 | 2026-08-17 | P1.2 shipped: device enrollment end to end. Server: admin bootstrap (`/admin/users`, `/admin/devices` behind `ADMIN_TOKEN`), one-time hashed enrollment codes, `/devices/enroll`, and `/validate-proximity` now accepts only Ed25519-signed envelopes (canonical-JSON signing string, ±5 min timestamp window as interim replay guard) from active devices — audit rows carry `device_uuid` and are written before responding. Mobile: non-extractable WebCrypto keypair in IndexedDB, enrollment UI, signed envelopes over BLE. Host: metrics characteristic assembles long writes (envelopes exceed one MTU on iOS). Unsigned validation now requires an explicit dev-only flag. |
