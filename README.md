@@ -38,8 +38,9 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | BLE proximity link (host advertises, phone submits metrics, verdict notified back) | Implemented — hardware smoke test pending |
 | Threshold validation with strict input validation (no bypass-by-omission) | Implemented, unit-tested |
 | Validation audit logging to Postgres | Implemented (`DATABASE_URL`) |
+| Device enrollment: per-device Ed25519 keys, one-time codes, signed requests | Implemented (P1.2) |
 | Wi-Fi / GPS as advisory fallback signals | Collected when available; assurance tiers in Phase 1 |
-| Trustworthy proximity (host-measured RSSI, nonce challenge, device enrollment) | Phase 1 — see roadmap |
+| Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
 | Same-network proof (LAN-served token) | Phase 1 |
 | QR scanning gated on a signed session token | Phase 1 |
 | Sensor platform (MQTT ingest, TimescaleDB, rules, fleet mgmt) | Phase 2 |
@@ -72,6 +73,29 @@ To persist validation logs, create a Postgres database (≥ 13), set
 `DATABASE_URL` in `.env`, and run `npm run db:migrate` — migrations live in
 [server/migrations](server/migrations) and are applied in order, tracked in
 `schema_migrations`.
+
+#### Enrolling a device
+
+Validation requires enrolled devices (Ed25519-signed requests). With
+`ADMIN_TOKEN` set, bootstrap a user and issue a one-time enrollment code:
+
+```bash
+curl -s -X POST localhost:3000/admin/users -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"organizationName":"Acme","email":"someone@acme.test","displayName":"Someone"}'
+```
+
+```bash
+curl -s -X POST localhost:3000/admin/devices -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"userEmail":"someone@acme.test"}'
+```
+
+The response contains a 24-hour, single-use `enrollmentCode`. In the mobile
+app, open **Enrollment**, point it at the server's LAN URL, and enter the code
+— the phone generates a non-extractable keypair and registers its public key.
+From then on every validation request is a signed envelope; unsigned requests
+are rejected (dev-only escape hatch: `ALLOW_UNSIGNED_VALIDATION=true` with no
+database).
 
 ### Host (desktop)
 
@@ -110,7 +134,10 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `WIFI_FLOOR_DBM` | `-60` | Weakest acceptable Wi-Fi signal (checked only if reported) |
 | `GPS_MAX_METERS` | `50` | Max distance from site (checked only if site is configured) |
 | `SITE_LATITUDE` / `SITE_LONGITUDE` | unset | Site coordinates; unset disables the GPS check |
-| `DATABASE_URL` | unset | Postgres connection string for `validation_logs` |
+| `DATABASE_URL` | unset | Postgres connection; required for enrollment + audit logging |
+| `ADMIN_TOKEN` | unset | Gates `/admin/*` (user + device bootstrap); unset disables them |
+| `ALLOW_UNSIGNED_VALIDATION` | `false` | Dev-only: unsigned validation when no DB is configured |
+| `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age (interim replay guard until P1.3) |
 
 ## Security model — read this
 

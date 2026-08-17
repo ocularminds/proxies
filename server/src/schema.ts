@@ -1,10 +1,8 @@
 import { z } from 'zod';
 
-// Every signal the client may submit, with hard ranges. bluetoothRssi and
-// deviceId are mandatory: a request without them is rejected, never passed.
-export const validationRequest = z
+// Metric ranges are hard bounds; the signature covers exactly these fields.
+export const metricsSchema = z
   .object({
-    deviceId: z.string().min(1).max(255),
     bluetoothRssi: z.number().int().min(-127).max(0),
     wifiSignalStrength: z.number().min(-127).max(0).optional(),
     gpsCoordinates: z
@@ -13,8 +11,50 @@ export const validationRequest = z
         longitude: z.number().min(-180).max(180),
       })
       .optional(),
-    qrData: z.string().max(4096).optional(),
   })
   .strict();
 
-export type ValidationRequest = z.infer<typeof validationRequest>;
+// The signed envelope a device submits (relayed verbatim by the host over BLE,
+// which is why identity and signature travel in the body, not headers).
+export const validationEnvelope = z
+  .object({
+    deviceId: z.string().uuid(),
+    timestamp: z.string().datetime(),
+    signature: z.string().min(64).max(512),
+    metrics: metricsSchema,
+  })
+  .strict();
+
+export const enrollRequest = z
+  .object({
+    enrollmentCode: z.string().min(8).max(128),
+    publicKey: z.string().min(32).max(128),
+    platform: z.string().max(64).optional(),
+  })
+  .strict();
+
+// Dev-mode body accepted only when ALLOW_UNSIGNED_VALIDATION=true and no
+// database is configured.
+export const unsignedValidation = z
+  .object({
+    deviceId: z.string().min(1).max(255),
+    metrics: metricsSchema,
+  })
+  .strict();
+
+export const adminCreateUser = z
+  .object({
+    organizationName: z.string().min(1).max(255),
+    email: z.string().email().max(255),
+    displayName: z.string().min(1).max(255),
+  })
+  .strict();
+
+export const adminCreateDevice = z
+  .object({
+    userEmail: z.string().email().max(255),
+  })
+  .strict();
+
+export type ValidationEnvelope = z.infer<typeof validationEnvelope>;
+export type ProximityMetricsInput = z.infer<typeof metricsSchema>;

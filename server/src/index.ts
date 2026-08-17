@@ -1,9 +1,17 @@
 import config from './config';
 import { createApp } from './app';
-import { createLogStore } from './db';
+import { createStores } from './stores';
 
-const logStore = createLogStore(config.databaseUrl);
-const app = createApp({ config, logStore });
+const stores = createStores(config.databaseUrl);
+if (!stores) {
+  console.warn(
+    `DATABASE_URL not set: identity endpoints disabled; validations are ${
+      config.allowUnsignedValidation ? 'UNSIGNED (dev mode)' : 'rejected'
+    }.`
+  );
+}
+
+const app = createApp({ config, stores });
 
 app.listen(config.port, () => {
   console.log(`Proxies server listening on port ${config.port}`);
