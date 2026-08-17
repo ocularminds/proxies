@@ -120,6 +120,22 @@ export const telemetryBatch = z
 
 export type TelemetryReading = z.infer<typeof telemetryReading>;
 
+export const adminCreateRule = z
+  .object({
+    organizationName: z.string().min(1).max(255),
+    siteId: z.number().int().positive().optional(),
+    deviceId: z.string().uuid().optional(),
+    metricType: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9_]+$/, 'snake_case identifiers only'),
+    op: z.enum(['gt', 'lt']),
+    threshold: z.number().finite(),
+    webhookUrl: z.string().url().max(2048).optional(),
+  })
+  .strict();
+
 export const redeemRequest = z
   .object({
     sessionId: z.string().uuid(),

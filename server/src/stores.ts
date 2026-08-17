@@ -30,6 +30,30 @@ export interface DeviceStore {
   claimTelemetrySeq(id: string, seq: number): Promise<boolean>;
 }
 
+export interface OrgStore {
+  findByName(name: string): Promise<{ id: number } | null>;
+}
+
+export interface RuleRecord {
+  id: number;
+  organizationId: number;
+  siteId: number | null;
+  deviceUuid: string | null;
+  metricType: string;
+  op: 'gt' | 'lt';
+  threshold: number;
+  webhookUrl: string | null;
+}
+
+export interface RuleStore {
+  create(rule: Omit<RuleRecord, 'id'>): Promise<{ id: number }>;
+  // Active rules matching the reading's scope (org, then site/device narrowing).
+  matching(organizationId: number, siteId: number | null, deviceUuid: string, types: string[]): Promise<RuleRecord[]>;
+  createAlert(ruleId: number, deviceUuid: string, readingTs: string, value: number): Promise<{ id: number }>;
+  markDelivered(alertId: number): Promise<void>;
+  listAlerts(organizationId: number, limit: number): Promise<unknown[]>;
+}
+
 export interface TelemetryStore {
   insertBatch(
     deviceUuid: string,
@@ -123,6 +147,8 @@ export interface Stores {
   sites: SiteStore;
   sessions: SessionStore;
   telemetry: TelemetryStore;
+  rules: RuleStore;
+  orgs: OrgStore;
   close(): Promise<void>;
 }
 
@@ -437,6 +463,72 @@ export function createStores(databaseUrl: string | null): Stores | null {
     },
   };
 
+  const rules: RuleStore = {
+    async create(rule) {
+      const result = await pool.query(
+        `INSERT INTO rules (organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [
+          rule.organizationId,
+          rule.siteId,
+          rule.deviceUuid,
+          rule.metricType,
+          rule.op,
+          rule.threshold,
+          rule.webhookUrl,
+        ]
+      );
+      return { id: Number(result.rows[0].id) };
+    },
+    async matching(organizationId, siteId, deviceUuid, types) {
+      const result = await pool.query(
+        `SELECT id, organization_id, site_id, device_uuid, metric_type, op, threshold, webhook_url
+         FROM rules
+         WHERE is_active
+           AND organization_id = $1
+           AND metric_type = ANY($2)
+           AND (site_id IS NULL OR site_id = $3)
+           AND (device_uuid IS NULL OR device_uuid = $4)`,
+        [organizationId, types, siteId, deviceUuid]
+      );
+      return result.rows.map((row) => ({
+        id: Number(row.id),
+        organizationId: Number(row.organization_id),
+        siteId: row.site_id === null ? null : Number(row.site_id),
+        deviceUuid: row.device_uuid,
+        metricType: row.metric_type,
+        op: row.op,
+        threshold: Number(row.threshold),
+        webhookUrl: row.webhook_url,
+      }));
+    },
+    async createAlert(ruleId, deviceUuid, readingTs, value) {
+      const result = await pool.query(
+        `INSERT INTO alerts (rule_id, device_uuid, reading_ts, value)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [ruleId, deviceUuid, readingTs, value]
+      );
+      return { id: Number(result.rows[0].id) };
+    },
+    async markDelivered(alertId) {
+      await pool.query(`UPDATE alerts SET delivered = TRUE WHERE id = $1`, [alertId]);
+    },
+    async listAlerts(organizationId, limit) {
+      const result = await pool.query(
+        `SELECT a.id, a.rule_id, a.device_uuid, a.reading_ts, a.value, a.delivered, a.created_at,
+                r.metric_type, r.op, r.threshold, d.name AS device_name
+         FROM alerts a
+         JOIN rules r ON r.id = a.rule_id
+         JOIN devices d ON d.id = a.device_uuid
+         WHERE r.organization_id = $1
+         ORDER BY a.created_at DESC
+         LIMIT $2`,
+        [organizationId, limit]
+      );
+      return result.rows;
+    },
+  };
+
   return {
     logs,
     devices,
@@ -446,6 +538,13 @@ export function createStores(databaseUrl: string | null): Stores | null {
     sites,
     sessions,
     telemetry,
+    rules,
+    orgs: {
+      async findByName(name: string) {
+        const result = await pool.query(`SELECT id FROM organizations WHERE name = $1`, [name]);
+        return result.rows[0] ? { id: Number(result.rows[0].id) } : null;
+      },
+    },
     async close() {
       await pool.end();
     },

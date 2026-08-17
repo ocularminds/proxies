@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit';
 import {
   adminCreateDevice,
   adminCreateHost,
+  adminCreateRule,
   adminCreateSite,
   adminCreateUser,
   attestedValidation,
@@ -27,16 +28,54 @@ import {
   verifyEd25519,
 } from './crypto';
 import type { AppConfig } from './types';
-import type { Stores } from './stores';
+import type { RuleRecord, Stores } from './stores';
 
 export type AppRuntimeConfig = Omit<
   AppConfig,
   'port' | 'databaseUrl' | 'tlsCertPath' | 'tlsKeyPath'
 >;
 
+export interface AlertNotification {
+  alertId: number;
+  rule: RuleRecord;
+  deviceUuid: string;
+  readingTs: string;
+  value: number;
+}
+
+export type Notifier = (notification: AlertNotification) => Promise<void>;
+
+// Default delivery: the rule's webhook when it has one, loud console otherwise
+// (SMS/WhatsApp adapters plug in here later).
+const defaultNotifier: Notifier = async ({ rule, deviceUuid, readingTs, value }) => {
+  const payload = {
+    ruleId: rule.id,
+    metricType: rule.metricType,
+    op: rule.op,
+    threshold: rule.threshold,
+    deviceUuid,
+    readingTs,
+    value,
+  };
+  if (rule.webhookUrl) {
+    const response = await fetch(rule.webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      throw new Error(`Webhook answered ${response.status}`);
+    }
+    return;
+  }
+  console.warn('ALERT:', JSON.stringify(payload));
+};
+
 export interface AppDeps {
   config: AppRuntimeConfig;
   stores: Stores | null;
+  notifier?: Notifier;
 }
 
 const ENROLLMENT_CODE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -61,7 +100,7 @@ function invalid(res: Response, issues: { path: PropertyKey[]; message: string }
   });
 }
 
-export function createApp({ config, stores }: AppDeps): Express {
+export function createApp({ config, stores, notifier = defaultNotifier }: AppDeps): Express {
   const app = express();
   if (config.trustProxy) {
     app.set('trust proxy', 1);
@@ -294,6 +333,54 @@ export function createApp({ config, stores }: AppDeps): Express {
     })
   );
 
+  app.post(
+    '/admin/rules',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = adminCreateRule.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+
+      const org = await db.orgs.findByName(parsed.data.organizationName);
+      if (!org) {
+        res.status(404).json({ success: false, message: 'No organization with that name.' });
+        return;
+      }
+      const rule = await db.rules.create({
+        organizationId: org.id,
+        siteId: parsed.data.siteId ?? null,
+        deviceUuid: parsed.data.deviceId ?? null,
+        metricType: parsed.data.metricType,
+        op: parsed.data.op,
+        threshold: parsed.data.threshold,
+        webhookUrl: parsed.data.webhookUrl ?? null,
+      });
+      res.status(201).json({ success: true, ruleId: rule.id });
+    })
+  );
+
+  app.get(
+    '/admin/alerts',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const organizationName = String(req.query.organization ?? '');
+      if (!organizationName) {
+        res.status(400).json({ success: false, message: 'organization query param required.' });
+        return;
+      }
+      const org = await db.orgs.findByName(organizationName);
+      if (!org) {
+        res.status(404).json({ success: false, message: 'No organization with that name.' });
+        return;
+      }
+      const limit = Math.min(Number(req.query.limit) || 100, 500);
+      res.json({ success: true, alerts: await db.rules.listAlerts(org.id, limit) });
+    })
+  );
+
   // Signed telemetry batches from any enrolled endpoint — see docs/TELEMETRY.md.
   app.post(
     '/telemetry',
@@ -363,7 +450,44 @@ export function createApp({ config, stores }: AppDeps): Express {
       await db.devices
         .markSeen(device.id)
         .catch((err: Error) => console.error('Failed to update last_seen:', err.message));
-      res.json({ success: true, accepted });
+
+      // Threshold rules: at most one alert per rule per batch.
+      let alertsFired = 0;
+      try {
+        const types = [...new Set(readings.map((reading) => reading.type))];
+        const activeRules = await db.rules.matching(
+          device.organizationId,
+          device.siteId,
+          device.id,
+          types
+        );
+        for (const rule of activeRules) {
+          const hit = readings.find(
+            (reading) =>
+              reading.type === rule.metricType &&
+              (rule.op === 'gt' ? reading.value > rule.threshold : reading.value < rule.threshold)
+          );
+          if (!hit) continue;
+          const alert = await db.rules.createAlert(rule.id, device.id, hit.ts, hit.value);
+          alertsFired += 1;
+          try {
+            await notifier({
+              alertId: alert.id,
+              rule,
+              deviceUuid: device.id,
+              readingTs: hit.ts,
+              value: hit.value,
+            });
+            await db.rules.markDelivered(alert.id);
+          } catch (err) {
+            console.error('Alert delivery failed:', (err as Error).message);
+          }
+        }
+      } catch (err) {
+        console.error('Rule evaluation failed:', (err as Error).message);
+      }
+
+      res.json({ success: true, accepted, alertsFired });
     })
   );
 
