@@ -40,8 +40,14 @@ class ResultCharacteristic extends Characteristic {
   }
 }
 
-// Write characteristic: the phone submits its proximity metrics as JSON.
+// Write characteristic: the phone submits its signed validation envelope as
+// JSON. Envelopes exceed one MTU on iOS, so chunks are assembled — offset
+// writes for prepared/long writes, and a parse attempt decides completeness.
+const MAX_ENVELOPE_BYTES = 4096;
+
 class MetricsCharacteristic extends Characteristic {
+  private pending: Buffer = Buffer.alloc(0);
+
   constructor(private readonly handleMetrics: (metrics: unknown) => void) {
     super({ uuid: METRICS_CHAR_UUID, properties: ['write', 'writeWithoutResponse'] });
   }
@@ -53,17 +59,35 @@ class MetricsCharacteristic extends Characteristic {
     _withoutResponse: boolean,
     callback: WriteRequestCallback
   ) {
-    if (offset) {
-      return callback(this.RESULT_ATTR_NOT_LONG);
+    if (offset === 0 && this.pending.length > 0 && !this.looksLikeContinuation(data)) {
+      this.pending = Buffer.alloc(0);
     }
-    let metrics: unknown;
-    try {
-      metrics = JSON.parse(data.toString('utf8'));
-    } catch {
+    if (offset !== 0 && offset !== this.pending.length) {
+      this.pending = Buffer.alloc(0);
+      return callback(this.RESULT_UNLIKELY_ERROR);
+    }
+    this.pending = offset === 0 && this.pending.length === 0
+      ? data
+      : Buffer.concat([this.pending, data]);
+    if (this.pending.length > MAX_ENVELOPE_BYTES) {
+      this.pending = Buffer.alloc(0);
       return callback(this.RESULT_UNLIKELY_ERROR);
     }
     callback(this.RESULT_SUCCESS);
-    this.handleMetrics(metrics);
+
+    try {
+      const parsed: unknown = JSON.parse(this.pending.toString('utf8'));
+      this.pending = Buffer.alloc(0);
+      this.handleMetrics(parsed);
+    } catch {
+      // Incomplete JSON: wait for the next chunk.
+    }
+  }
+
+  // Sequential zero-offset writes carry continuation chunks on stacks that
+  // fragment without offsets; a fresh envelope always starts with '{'.
+  private looksLikeContinuation(data: Buffer): boolean {
+    return data.length > 0 && data[0] !== 0x7b;
   }
 }
 

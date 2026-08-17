@@ -25,6 +25,21 @@
       width: 100%;
     }
     button:disabled { opacity: 0.5; }
+    button.secondary { background: #223238; color: #d9e4e6; margin-top: 10px; }
+    details { margin: 20px 0; border: 1px solid #223238; border-radius: 8px; padding: 12px 14px; }
+    summary { cursor: pointer; color: #8fa6ad; font-size: 14px; }
+    label { display: block; font-size: 13px; color: #8fa6ad; margin: 12px 0 4px; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 15px;
+      color: #d9e4e6;
+      background: #162124;
+      border: 1px solid #223238;
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    #enroll-status { font-size: 13px; min-height: 18px; }
     #status { min-height: 24px; margin: 18px 0; font-size: 15px; }
     #status.ok { color: #7cc79a; }
     #status.fail { color: #e58274; }
@@ -38,6 +53,15 @@
     <p class="sub">Prove you're on premises before scanning.</p>
     <button id="validate">Pair with host &amp; validate</button>
     <p id="status"></p>
+    <details id="enrollment">
+      <summary>Enrollment</summary>
+      <label for="server-url">Server URL</label>
+      <input id="server-url" placeholder="http://192.168.1.20:3000" autocomplete="off">
+      <label for="enroll-code">Enrollment code</label>
+      <input id="enroll-code" placeholder="Code from your administrator" autocomplete="off">
+      <button id="enroll-btn" class="secondary">Enroll this device</button>
+      <p id="enroll-status"></p>
+    </details>
     <ul id="log"></ul>
   </main>
   <script type="module" src="/src/main.ts"></script>

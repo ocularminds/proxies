@@ -20,6 +20,13 @@ const config: AppConfig = {
     longitude: num(process.env.SITE_LONGITUDE, NaN),
   },
   databaseUrl: process.env.DATABASE_URL || null,
+  // Gates the /admin endpoints; unset disables them entirely.
+  adminToken: process.env.ADMIN_TOKEN || null,
+  // Dev-only escape hatch: accept unsigned validation bodies when no database
+  // is configured. Never enable outside a desk demo.
+  allowUnsignedValidation: process.env.ALLOW_UNSIGNED_VALIDATION === 'true',
+  // Interim replay guard until P1.3 nonces: signed timestamps must be recent.
+  timestampToleranceMs: num(process.env.TIMESTAMP_TOLERANCE_MS, 300_000),
 };
 
 export default config;

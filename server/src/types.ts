@@ -13,10 +13,14 @@ export interface ValidationConfig {
 export interface AppConfig extends ValidationConfig {
   port: number;
   databaseUrl: string | null;
+  adminToken: string | null;
+  allowUnsignedValidation: boolean;
+  timestampToleranceMs: number;
 }
 
 export interface ValidationLogEntry {
   deviceId: string;
+  deviceUuid?: string | null;
   success: boolean;
   errorMessage: string | null;
 }

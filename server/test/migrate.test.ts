@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { Pool } from 'pg';
 import { migrate } from '../src/migrate';
@@ -23,11 +25,12 @@ describe.skipIf(!url)('migrate', () => {
     try {
       await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
 
+      const allMigrations = readdirSync(path.join(__dirname, '..', 'migrations'))
+        .filter((file) => file.endsWith('.sql'))
+        .sort();
       const first = await migrate(url!);
-      expect(first).toEqual([
-        '001_baseline_validation_logs.sql',
-        '002_identity_and_sites.sql',
-      ]);
+      expect(first).toEqual(allMigrations);
+      expect(first.length).toBeGreaterThanOrEqual(2);
 
       const second = await migrate(url!);
       expect(second).toEqual([]);

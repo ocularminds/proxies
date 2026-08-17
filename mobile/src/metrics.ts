@@ -3,7 +3,6 @@ import { Network } from '@capacitor/network';
 import { Geolocation } from '@capacitor/geolocation';
 
 export interface ProximityMetrics {
-  deviceId: string;
   bluetoothRssi: number;
   wifiSignalStrength?: number;
   gpsCoordinates?: { latitude: number; longitude: number };
@@ -11,9 +10,9 @@ export interface ProximityMetrics {
 
 // Phone-measured signals. These are advisory: the phone reporting on itself is
 // not proof of presence (the trust rework moves authority to the host side).
-export async function collectProximityMetrics(deviceId: string): Promise<ProximityMetrics> {
-  const rssi = await BleClient.readRssi(deviceId);
-  const metrics: ProximityMetrics = { deviceId, bluetoothRssi: Math.round(rssi) };
+export async function collectProximityMetrics(bleDeviceId: string): Promise<ProximityMetrics> {
+  const rssi = await BleClient.readRssi(bleDeviceId);
+  const metrics: ProximityMetrics = { bluetoothRssi: Math.round(rssi) };
 
   const wifi = await getWifiSignalStrength();
   if (wifi !== null) {

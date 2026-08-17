@@ -1,6 +1,7 @@
 import { BleClient, dataViewToText, textToDataView } from '@capacitor-community/bluetooth-le';
 import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID } from './uuids';
 import { collectProximityMetrics } from './metrics';
+import { buildSignedEnvelope } from './api';
 
 export interface ValidationResult {
   success: boolean;
@@ -21,6 +22,7 @@ export async function runValidation(onStatus: StatusListener): Promise<Validatio
   try {
     onStatus(`Connected to ${device.name ?? 'host'}. Collecting metrics…`);
     const metrics = await collectProximityMetrics(device.deviceId);
+    const envelope = await buildSignedEnvelope(metrics);
 
     let resolveVerdict: (result: ValidationResult) => void;
     const verdict = new Promise<ValidationResult>((resolve) => {
@@ -38,9 +40,9 @@ export async function runValidation(onStatus: StatusListener): Promise<Validatio
       device.deviceId,
       SERVICE_UUID,
       METRICS_CHAR_UUID,
-      textToDataView(JSON.stringify(metrics))
+      textToDataView(JSON.stringify(envelope))
     );
-    onStatus('Metrics sent. Waiting for the verdict…');
+    onStatus('Signed metrics sent. Waiting for the verdict…');
 
     const timeout = new Promise<ValidationResult>((resolve) =>
       setTimeout(
