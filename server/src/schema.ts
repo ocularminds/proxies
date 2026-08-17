@@ -80,11 +80,45 @@ export const adminCreateUser = z
   })
   .strict();
 
-export const adminCreateDevice = z
+// Phones bind to a user; sensors and gateways bind to a site.
+export const adminCreateDevice = z.union([
+  z.object({ userEmail: z.string().email().max(255) }).strict(),
+  z
+    .object({
+      siteId: z.number().int().positive(),
+      kind: z.enum(['sensor', 'gateway']),
+      name: z.string().min(1).max(255).optional(),
+    })
+    .strict(),
+]);
+
+// One telemetry reading — see docs/TELEMETRY.md.
+export const telemetryReading = z
   .object({
-    userEmail: z.string().email().max(255),
+    ts: z.string().datetime(),
+    type: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9_]+$/, 'snake_case identifiers only'),
+    value: z.number().finite(),
+    unit: z.string().max(32).optional(),
+    battery: z.number().min(0).max(100).optional(),
+    quality: z.string().max(32).optional(),
   })
   .strict();
+
+export const telemetryBatch = z
+  .object({
+    deviceId: z.string().uuid(),
+    seq: z.number().int().min(0),
+    timestamp: z.string().datetime(),
+    signature: z.string().min(64).max(512),
+    readings: z.array(telemetryReading).min(1).max(500),
+  })
+  .strict();
+
+export type TelemetryReading = z.infer<typeof telemetryReading>;
 
 export const redeemRequest = z
   .object({

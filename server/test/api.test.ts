@@ -10,6 +10,7 @@ import {
   hostAttestSigningString,
   lanTokenSigningString,
   nonceSigningString,
+  telemetrySigningString,
   validationSigningString,
 } from '../src/crypto';
 
@@ -533,6 +534,102 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     const passed = await freshAttestedValidation({ bluetoothRssi: -50 }, -55);
     expect(passed.status).toBe(200);
     await pool.query(`UPDATE sites SET rssi_floor_dbm = -70 WHERE id = $1`, [siteId]);
+  });
+
+  const sensorKeys = makeKeys();
+  let sensorId: string;
+
+  function telemetryBody(
+    devId: string,
+    key: KeyObject,
+    seq: number,
+    readings: Record<string, unknown>[],
+    timestamp = new Date().toISOString()
+  ) {
+    const signature = signWith(key, telemetrySigningString(devId, seq, timestamp, readings));
+    return { deviceId: devId, seq, timestamp, signature, readings };
+  }
+
+  test('a sensor enrolls at a site and posts a signed batch', async () => {
+    const created = await request(app)
+      .post('/admin/devices')
+      .set(admin)
+      .send({ siteId, kind: 'sensor', name: 'soil-probe-1' });
+    expect(created.status).toBe(201);
+    sensorId = created.body.deviceId;
+
+    const enrolled = await request(app)
+      .post('/devices/enroll')
+      .send({ enrollmentCode: created.body.enrollmentCode, publicKey: sensorKeys.publicKeyB64 });
+    expect(enrolled.status).toBe(200);
+
+    const now = new Date().toISOString();
+    const res = await request(app)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 1, [
+          { ts: now, type: 'soil_moisture_pct', value: 31.4, unit: '%', battery: 87 },
+          { ts: now, type: 'temp_c', value: 24.9 },
+        ])
+      );
+    expect(res.status).toBe(200);
+    expect(res.body.accepted).toBe(2);
+
+    const rows = await pool.query(
+      `SELECT type, value, site_id, organization_id FROM telemetry WHERE device_uuid = $1 ORDER BY type`,
+      [sensorId]
+    );
+    expect(rows.rows.length).toBe(2);
+    expect(Number(rows.rows[0].site_id)).toBe(siteId);
+    expect(rows.rows[0].organization_id).not.toBeNull();
+  });
+
+  test('a replayed or reordered batch seq is rejected', async () => {
+    const replay = await request(app)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 1, [
+          { ts: new Date().toISOString(), type: 'temp_c', value: 20 },
+        ])
+      );
+    expect(replay.status).toBe(409);
+    expect(replay.body.code).toBe('SEQ_REPLAYED');
+  });
+
+  test('tampered readings fail the batch signature', async () => {
+    const body = telemetryBody(sensorId, sensorKeys.privateKey, 3, [
+      { ts: new Date().toISOString(), type: 'temp_c', value: 20 },
+    ]);
+    body.readings = [{ ts: new Date().toISOString(), type: 'temp_c', value: 99 }];
+    const res = await request(app).post('/telemetry').send(body);
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('SIGNATURE_INVALID');
+  });
+
+  test('stale batch timestamps and future readings are rejected', async () => {
+    const stale = await request(app)
+      .post('/telemetry')
+      .send(
+        telemetryBody(
+          sensorId,
+          sensorKeys.privateKey,
+          4,
+          [{ ts: new Date().toISOString(), type: 'temp_c', value: 20 }],
+          new Date(Date.now() - 10 * 60 * 1000).toISOString()
+        )
+      );
+    expect(stale.status).toBe(401);
+    expect(stale.body.code).toBe('BATCH_STALE');
+
+    const future = await request(app)
+      .post('/telemetry')
+      .send(
+        telemetryBody(sensorId, sensorKeys.privateKey, 5, [
+          { ts: new Date(Date.now() + 10 * 60 * 1000).toISOString(), type: 'temp_c', value: 20 },
+        ])
+      );
+    expect(future.status).toBe(400);
+    expect(future.body.code).toBe('READING_TS_FUTURE');
   });
 
   test('a revoked device is refused', async () => {

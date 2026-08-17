@@ -10,6 +10,7 @@ import {
   enrollRequest,
   nonceRequest,
   redeemRequest,
+  telemetryBatch,
   unsignedValidation,
 } from './schema';
 import { evaluateProximity } from './evaluate';
@@ -21,6 +22,7 @@ import {
   nonceSigningString,
   secretsEqual,
   sha256Hex,
+  telemetrySigningString,
   validationSigningString,
   verifyEd25519,
 } from './crypto';
@@ -142,19 +144,37 @@ export function createApp({ config, stores }: AppDeps): Express {
       const parsed = adminCreateDevice.safeParse(req.body);
       if (!parsed.success) return invalid(res, parsed.error.issues);
 
-      const user = await db.users.findByEmail(parsed.data.userEmail);
-      if (!user) {
-        res.status(404).json({ success: false, message: 'No user with that email.' });
-        return;
-      }
       // The code is returned once and only its hash is stored.
       const enrollmentCode = generateEnrollmentCode();
-      const device = await db.devices.createPending(
-        user.id,
-        sha256Hex(enrollmentCode),
-        new Date(Date.now() + ENROLLMENT_CODE_TTL_MS)
-      );
-      res.status(201).json({ success: true, deviceId: device.id, enrollmentCode });
+      const expiresAt = new Date(Date.now() + ENROLLMENT_CODE_TTL_MS);
+
+      if ('userEmail' in parsed.data) {
+        const user = await db.users.findByEmail(parsed.data.userEmail);
+        if (!user) {
+          res.status(404).json({ success: false, message: 'No user with that email.' });
+          return;
+        }
+        const device = await db.devices.createPending(user.id, sha256Hex(enrollmentCode), expiresAt);
+        res.status(201).json({ success: true, deviceId: device.id, enrollmentCode });
+        return;
+      }
+
+      try {
+        const device = await db.devices.createPendingForSite(
+          parsed.data.siteId,
+          parsed.data.kind,
+          parsed.data.name ?? null,
+          sha256Hex(enrollmentCode),
+          expiresAt
+        );
+        res.status(201).json({ success: true, deviceId: device.id, enrollmentCode });
+      } catch (err) {
+        if ((err as { code?: string }).code === '23503') {
+          res.status(404).json({ success: false, message: 'No site with that id.' });
+          return;
+        }
+        throw err;
+      }
     })
   );
 
@@ -271,6 +291,79 @@ export function createApp({ config, stores }: AppDeps): Express {
         return;
       }
       res.json({ success: true, deviceId: device.id });
+    })
+  );
+
+  // Signed telemetry batches from any enrolled endpoint — see docs/TELEMETRY.md.
+  app.post(
+    '/telemetry',
+    wrap(async (req, res) => {
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = telemetryBatch.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+      const { deviceId, seq, timestamp, signature, readings } = parsed.data;
+
+      const device = await db.devices.getById(deviceId);
+      if (!device || device.status !== 'active' || !device.publicKey) {
+        res
+          .status(401)
+          .json({ success: false, code: 'DEVICE_UNKNOWN', message: 'Unknown or inactive device.' });
+        return;
+      }
+      const age = Math.abs(Date.now() - Date.parse(timestamp));
+      if (!(age <= config.timestampToleranceMs)) {
+        res
+          .status(401)
+          .json({ success: false, code: 'BATCH_STALE', message: 'Stale or future batch timestamp.' });
+        return;
+      }
+      const maxFutureMs = Date.now() + 5 * 60 * 1000;
+      if (readings.some((reading) => Date.parse(reading.ts) > maxFutureMs)) {
+        res.status(400).json({
+          success: false,
+          code: 'READING_TS_FUTURE',
+          message: 'Reading timestamps may not be in the future.',
+        });
+        return;
+      }
+
+      // Claim the seq before verifying — replays and reorders lose the race.
+      const claimed = await db.devices.claimTelemetrySeq(device.id, seq);
+      if (!claimed) {
+        res.status(409).json({
+          success: false,
+          code: 'SEQ_REPLAYED',
+          message: 'Batch seq must be strictly greater than the last accepted one.',
+        });
+        return;
+      }
+      const signedString = telemetrySigningString(deviceId, seq, timestamp, readings);
+      if (!verifyEd25519(device.publicKey, signedString, signature)) {
+        res
+          .status(401)
+          .json({ success: false, code: 'SIGNATURE_INVALID', message: 'Invalid signature.' });
+        return;
+      }
+      if (device.organizationId === null) {
+        res.status(403).json({
+          success: false,
+          code: 'DEVICE_UNATTRIBUTED',
+          message: 'Device has no organization attribution.',
+        });
+        return;
+      }
+
+      const accepted = await db.telemetry.insertBatch(
+        device.id,
+        device.organizationId,
+        device.siteId,
+        readings
+      );
+      await db.devices
+        .markSeen(device.id)
+        .catch((err: Error) => console.error('Failed to update last_seen:', err.message));
+      res.json({ success: true, accepted });
     })
   );
 

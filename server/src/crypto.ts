@@ -94,6 +94,19 @@ export function generateNonce(): string {
   return randomBytes(24).toString('base64url');
 }
 
+// The string a device signs over a telemetry batch; seq is strictly monotonic
+// per device, so a replayed batch loses the atomic claim.
+export function telemetrySigningString(
+  deviceId: string,
+  seq: number,
+  timestamp: string,
+  readings: unknown
+): string {
+  return `proxies-telemetry\n${deviceId}\n${seq}\n${timestamp}\n${sha256Hex(
+    canonicalJson(readings)
+  )}`;
+}
+
 // The string a host signs to attest that it relayed a device envelope over its
 // BLE radio. rssi is the host-measured signal (null until the radio reports it).
 export function hostAttestSigningString(
