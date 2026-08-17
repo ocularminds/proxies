@@ -87,7 +87,19 @@ export interface RuleStore {
   listAlerts(organizationId: number, limit: number): Promise<unknown[]>;
 }
 
+export interface LatestReading {
+  deviceUuid: string;
+  deviceName: string | null;
+  siteId: number | null;
+  siteName: string | null;
+  value: number;
+  battery: number | null;
+  ts: Date;
+}
+
 export interface TelemetryStore {
+  // Latest reading of one metric type per device in the organization.
+  latestByType(organizationId: number, type: string): Promise<LatestReading[]>;
   insertBatch(
     deviceUuid: string,
     organizationId: number,
@@ -309,6 +321,28 @@ export function createStores(databaseUrl: string | null): Stores | null {
   };
 
   const telemetry: TelemetryStore = {
+    async latestByType(organizationId, type) {
+      const result = await pool.query(
+        `SELECT DISTINCT ON (t.device_uuid)
+                t.device_uuid, d.name AS device_name, t.site_id, s.name AS site_name,
+                t.value, t.battery, t.ts
+         FROM telemetry t
+         JOIN devices d ON d.id = t.device_uuid
+         LEFT JOIN sites s ON s.id = t.site_id
+         WHERE t.organization_id = $1 AND t.type = $2
+         ORDER BY t.device_uuid, t.ts DESC`,
+        [organizationId, type]
+      );
+      return result.rows.map((row) => ({
+        deviceUuid: row.device_uuid,
+        deviceName: row.device_name,
+        siteId: row.site_id === null ? null : Number(row.site_id),
+        siteName: row.site_name,
+        value: Number(row.value),
+        battery: row.battery === null ? null : Number(row.battery),
+        ts: row.ts,
+      }));
+    },
     async insertBatch(deviceUuid, organizationId, siteId, readings) {
       const params: unknown[] = [];
       const rows = readings.map((reading, i) => {

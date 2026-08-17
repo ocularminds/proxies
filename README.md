@@ -55,6 +55,7 @@ every push. [deploy/](deploy/) boots the whole stack with one `docker compose up
 | Presence as telemetry — validations land in the same stream as sensor data | Implemented (P2.10) |
 | One-box deploy: Timescale + server + mosquitto + provisioned Grafana dashboard | Implemented (P2.8) — first boot verified |
 | Vertical kits (agriculture · waste · factory · water): metric catalogs, labeled rule packs, `apply-kit`, simulator CLI, templated dashboard | Implemented (P3.0) |
+| **Waste pilot** (chosen vertical): provisioning CLI, collection-route endpoint, field runbook ([docs/PILOTS/waste.md](docs/PILOTS/waste.md)) | Activation ready (P3.W1); field deployment next |
 | Gateway hardware, BLE payload crypto, retention/aggregates, SMS/WhatsApp | Remaining — see roadmap |
 
 ## Repository layout

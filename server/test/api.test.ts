@@ -755,6 +755,49 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     expect(alerts.body.alerts[0].label).toBe('Bin needs collection');
   });
 
+  test('the waste collection route lists bins past the fill threshold, fullest first', async () => {
+    // Second bin, mostly empty.
+    const second = makeKeys();
+    const created = await request(app)
+      .post('/admin/devices')
+      .set(admin)
+      .send({ siteId, kind: 'sensor', name: 'waste-02' });
+    await request(app)
+      .post('/devices/enroll')
+      .send({ enrollmentCode: created.body.enrollmentCode, publicKey: second.publicKeyB64 });
+    const res = await request(app)
+      .post('/telemetry')
+      .send(
+        (function () {
+          const readings = [{ ts: new Date().toISOString(), type: 'fill_pct', value: 42, unit: '%' }];
+          const timestamp = new Date().toISOString();
+          const signature = signWith(
+            second.privateKey,
+            telemetrySigningString(created.body.deviceId, 1, timestamp, readings)
+          );
+          return { deviceId: created.body.deviceId, seq: 1, timestamp, signature, readings };
+        })()
+      );
+    expect(res.status).toBe(200);
+
+    // sensorId reported fill_pct 91 in the kit test; waste-02 sits at 42.
+    const route = await request(app).get('/admin/routes/waste?organization=Acme').set(admin);
+    expect(route.status).toBe(200);
+    expect(route.body.threshold).toBe(80);
+    expect(route.body.binsTotal).toBe(2);
+    expect(route.body.bins.length).toBe(1);
+    expect(route.body.bins[0].fillPct).toBe(91);
+
+    const low = await request(app)
+      .get('/admin/routes/waste?organization=Acme&threshold=40')
+      .set(admin);
+    expect(low.body.bins.length).toBe(2);
+    expect(low.body.bins[0].fillPct).toBeGreaterThan(low.body.bins[1].fillPct);
+
+    const unauthed = await request(app).get('/admin/routes/waste?organization=Acme');
+    expect(unauthed.status).toBe(401);
+  });
+
   test('fleet health lists devices and hosts with battery and staleness', async () => {
     const res = await request(app).get('/admin/fleet?organization=Acme').set(admin);
     expect(res.status).toBe(200);

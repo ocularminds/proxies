@@ -419,6 +419,41 @@ export function createApp({ config, stores, notifier = defaultNotifier }: AppDep
     })
   );
 
+  // Waste vertical: today's collection route — bins at or past the fill
+  // threshold, fullest first.
+  app.get(
+    '/admin/routes/waste',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const organizationName = String(req.query.organization ?? '');
+      if (!organizationName) {
+        res.status(400).json({ success: false, message: 'organization query param required.' });
+        return;
+      }
+      const org = await db.orgs.findByName(organizationName);
+      if (!org) {
+        res.status(404).json({ success: false, message: 'No organization with that name.' });
+        return;
+      }
+      const threshold = Math.min(Math.max(Number(req.query.threshold) || 80, 0), 100);
+      const latest = await db.telemetry.latestByType(org.id, 'fill_pct');
+      const bins = latest
+        .filter((bin) => bin.value >= threshold)
+        .sort((a, b) => b.value - a.value)
+        .map((bin) => ({
+          deviceId: bin.deviceUuid,
+          name: bin.deviceName,
+          siteName: bin.siteName,
+          fillPct: bin.value,
+          battery: bin.battery,
+          lastReading: bin.ts,
+        }));
+      res.json({ success: true, threshold, bins, binsTotal: latest.length });
+    })
+  );
+
   app.get(
     '/admin/alerts',
     wrap(async (req, res) => {
