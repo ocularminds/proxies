@@ -1,4 +1,45 @@
-<ion-content>
-    <ion-button (click)="pairAndSendMetrics()">Pair with Host</ion-button>
-  </ion-content>
-  
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Proxies</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 24px 20px;
+      background: #10181c;
+      color: #d9e4e6;
+    }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: #8fa6ad; font-size: 14px; margin: 0 0 24px; }
+    button {
+      font-size: 16px;
+      font-weight: 600;
+      color: #10181c;
+      background: #4cc2cc;
+      border: none;
+      border-radius: 8px;
+      padding: 14px 20px;
+      width: 100%;
+    }
+    button:disabled { opacity: 0.5; }
+    #status { min-height: 24px; margin: 18px 0; font-size: 15px; }
+    #status.ok { color: #7cc79a; }
+    #status.fail { color: #e58274; }
+    ul { list-style: none; padding: 0; margin: 0; font-size: 13px; color: #8fa6ad; }
+    li { padding: 5px 0; border-bottom: 1px solid #223238; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Proxies</h1>
+    <p class="sub">Prove you're on premises before scanning.</p>
+    <button id="validate">Pair with host &amp; validate</button>
+    <p id="status"></p>
+    <ul id="log"></ul>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
