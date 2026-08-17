@@ -3,12 +3,15 @@ import {
   adminCreateDevice,
   adminCreateUser,
   enrollRequest,
+  nonceRequest,
   unsignedValidation,
   validationEnvelope,
 } from './schema';
 import { evaluateProximity } from './evaluate';
 import {
   generateEnrollmentCode,
+  generateNonce,
+  nonceSigningString,
   secretsEqual,
   sha256Hex,
   validationSigningString,
@@ -156,6 +159,45 @@ export function createApp({ config, stores }: AppDeps): Express {
   );
 
   app.post(
+    '/nonces',
+    wrap(async (req, res) => {
+      const db = requireStores(res);
+      if (!db) return;
+      const parsed = nonceRequest.safeParse(req.body);
+      if (!parsed.success) return invalid(res, parsed.error.issues);
+      const { deviceId, timestamp, signature } = parsed.data;
+
+      const device = await db.devices.getById(deviceId);
+      if (!device || device.status !== 'active' || !device.publicKey) {
+        res.status(401).json({ success: false, message: 'Unknown or inactive device.' });
+        return;
+      }
+      const age = Math.abs(Date.now() - Date.parse(timestamp));
+      if (!(age <= config.timestampToleranceMs)) {
+        res.status(401).json({ success: false, message: 'Stale or future timestamp.' });
+        return;
+      }
+      if (!verifyEd25519(device.publicKey, nonceSigningString(deviceId, timestamp), signature)) {
+        res.status(401).json({ success: false, message: 'Invalid signature.' });
+        return;
+      }
+
+      const nonce = generateNonce();
+      await db.nonces.issue(
+        device.id,
+        sha256Hex(nonce),
+        new Date(Date.now() + config.nonceTtlMs)
+      );
+      // Opportunistic housekeeping: drop nonces expired for over an hour.
+      db.nonces
+        .deleteExpired(60 * 60 * 1000)
+        .catch((err: Error) => console.error('Nonce cleanup failed:', err.message));
+
+      res.json({ success: true, nonce, expiresInMs: config.nonceTtlMs });
+    })
+  );
+
+  app.post(
     '/validate-proximity',
     wrap(async (req, res) => {
       if (!stores) {
@@ -183,7 +225,7 @@ export function createApp({ config, stores }: AppDeps): Express {
 
       const parsed = validationEnvelope.safeParse(req.body);
       if (!parsed.success) return invalid(res, parsed.error.issues);
-      const { deviceId, timestamp, signature, metrics } = parsed.data;
+      const { deviceId, nonce, signature, metrics } = parsed.data;
 
       // The audit row is written before the response goes out; a log failure
       // is reported but does not take validation down.
@@ -211,13 +253,14 @@ export function createApp({ config, stores }: AppDeps): Express {
         return deny(403, 'Device is not enrolled.', device.id);
       }
 
-      // Interim freshness window; single-use nonces land in P1.3.
-      const age = Math.abs(Date.now() - Date.parse(timestamp));
-      if (!(age <= config.timestampToleranceMs)) {
-        return deny(401, 'Stale or future timestamp.', device.id);
+      // Claim before verifying: a bad signature burns the nonce, and parallel
+      // replays lose the atomic race.
+      const claimed = await stores.nonces.claim(sha256Hex(nonce), device.id);
+      if (!claimed) {
+        return deny(401, 'Invalid, expired, or already-used nonce.', device.id);
       }
 
-      const signedString = validationSigningString(deviceId, timestamp, metrics);
+      const signedString = validationSigningString(deviceId, nonce, metrics);
       if (!verifyEd25519(device.publicKey, signedString, signature)) {
         return deny(401, 'Invalid signature.', device.id);
       }

@@ -26,7 +26,7 @@ describe('metricsSchema', () => {
 describe('validationEnvelope', () => {
   const valid = {
     deviceId: '7d90d0c0-09a0-45b8-b873-e7110f3d5fb9',
-    timestamp: new Date().toISOString(),
+    nonce: 'n'.repeat(32),
     signature: 'a'.repeat(88),
     metrics: { bluetoothRssi: -50 },
   };

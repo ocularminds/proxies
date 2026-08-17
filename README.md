@@ -93,9 +93,12 @@ curl -s -X POST localhost:3000/admin/devices -H "x-admin-token: $ADMIN_TOKEN" \
 The response contains a 24-hour, single-use `enrollmentCode`. In the mobile
 app, open **Enrollment**, point it at the server's LAN URL, and enter the code
 — the phone generates a non-extractable keypair and registers its public key.
-From then on every validation request is a signed envelope; unsigned requests
-are rejected (dev-only escape hatch: `ALLOW_UNSIGNED_VALIDATION=true` with no
-database).
+From then on every validation is a two-step protocol: the phone requests a
+**single-use nonce** (signed request, ±5 min timestamp window), then submits a
+signed envelope `{deviceId, nonce, signature, metrics}` over BLE via the host.
+Nonces expire after 2 minutes and die on first use, so captured envelopes
+cannot be replayed. Unsigned requests are rejected (dev-only escape hatch:
+`ALLOW_UNSIGNED_VALIDATION=true` with no database).
 
 ### Host (desktop)
 
@@ -137,7 +140,8 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `DATABASE_URL` | unset | Postgres connection; required for enrollment + audit logging |
 | `ADMIN_TOKEN` | unset | Gates `/admin/*` (user + device bootstrap); unset disables them |
 | `ALLOW_UNSIGNED_VALIDATION` | `false` | Dev-only: unsigned validation when no DB is configured |
-| `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age (interim replay guard until P1.3) |
+| `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age on nonce requests |
+| `NONCE_TTL_MS` | `120000` | Validity window of a single-use validation nonce |
 
 ## Security model — read this
 

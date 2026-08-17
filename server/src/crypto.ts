@@ -66,11 +66,22 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// The string a device signs for a validation request.
+// The string a device signs for a validation request. The nonce is single-use
+// and short-lived, so it carries the freshness guarantee.
 export function validationSigningString(
   deviceId: string,
-  timestamp: string,
+  nonce: string,
   metrics: unknown
 ): string {
-  return `proxies-validate\n${deviceId}\n${timestamp}\n${canonicalJson(metrics)}`;
+  return `proxies-validate\n${deviceId}\n${nonce}\n${canonicalJson(metrics)}`;
+}
+
+// The string a device signs to request a nonce; the timestamp window guards
+// this pre-nonce endpoint.
+export function nonceSigningString(deviceId: string, timestamp: string): string {
+  return `proxies-nonce\n${deviceId}\n${timestamp}`;
+}
+
+export function generateNonce(): string {
+  return randomBytes(24).toString('base64url');
 }

@@ -25,8 +25,10 @@ const config: AppConfig = {
   // Dev-only escape hatch: accept unsigned validation bodies when no database
   // is configured. Never enable outside a desk demo.
   allowUnsignedValidation: process.env.ALLOW_UNSIGNED_VALIDATION === 'true',
-  // Interim replay guard until P1.3 nonces: signed timestamps must be recent.
+  // Freshness window for signed nonce requests.
   timestampToleranceMs: num(process.env.TIMESTAMP_TOLERANCE_MS, 300_000),
+  // Validity window of an issued single-use validation nonce.
+  nonceTtlMs: num(process.env.NONCE_TTL_MS, 120_000),
 };
 
 export default config;

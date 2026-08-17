@@ -16,6 +16,7 @@ export interface AppConfig extends ValidationConfig {
   adminToken: string | null;
   allowUnsignedValidation: boolean;
   timestampToleranceMs: number;
+  nonceTtlMs: number;
 }
 
 export interface ValidationLogEntry {
