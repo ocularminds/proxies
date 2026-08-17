@@ -1,0 +1,29 @@
+{
+  "name": "proxies-host",
+  "version": "0.1.0",
+  "description": "Desktop host for the Proxies proximity validator: advertises the BLE service and forwards phone metrics to the server",
+  "main": "dist/main.js",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-assets.cjs",
+    "start": "npm run build && electron .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@abandonware/bleno": "^0.6.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@types/node": "^22.5.0",
+    "electron": "^31.3.0",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.8.0"
+  }
+}
