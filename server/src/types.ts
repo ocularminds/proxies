@@ -27,12 +27,16 @@ export interface AppConfig extends ValidationConfig {
   };
 }
 
+export type AssuranceTier = 'A' | 'B' | 'C';
+
 export interface ValidationLogEntry {
   deviceId: string;
   deviceUuid?: string | null;
   hostId?: string | null;
   siteId?: number | null;
   lanVerified?: boolean;
+  assuranceTier?: AssuranceTier | null;
+  errorCode?: string | null;
   success: boolean;
   errorMessage: string | null;
 }

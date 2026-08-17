@@ -41,14 +41,26 @@ export interface HostStore {
   markSeen(id: string): Promise<void>;
 }
 
+export interface SiteRecord {
+  id: number;
+  latitude: number | null;
+  longitude: number | null;
+  rssiFloorDbm: number;
+  wifiFloorDbm: number;
+  gpsMaxMeters: number;
+  minTier: 'A' | 'B' | 'C';
+}
+
 export interface SiteStore {
   // Upserts the organization by name and creates the site under it.
   create(
     organizationName: string,
     name: string,
     latitude: number | null,
-    longitude: number | null
+    longitude: number | null,
+    minTier?: 'A' | 'B' | 'C'
   ): Promise<{ id: number } | null>;
+  getById(id: number): Promise<SiteRecord | null>;
 }
 
 export interface RedeemedSession {
@@ -100,18 +112,23 @@ export function createStores(databaseUrl: string | null): Stores | null {
       hostId,
       siteId,
       lanVerified,
+      assuranceTier,
+      errorCode,
       success,
       errorMessage,
     }: ValidationLogEntry) {
       await pool.query(
-        `INSERT INTO validation_logs (device_id, device_uuid, host_id, site_id, lan_verified, success, error_message)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO validation_logs
+           (device_id, device_uuid, host_id, site_id, lan_verified, assurance_tier, error_code, success, error_message)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           deviceId,
           deviceUuid ?? null,
           hostId ?? null,
           siteId ?? null,
           lanVerified ?? false,
+          assuranceTier ?? null,
+          errorCode ?? null,
           success,
           errorMessage,
         ]
@@ -245,7 +262,7 @@ export function createStores(databaseUrl: string | null): Stores | null {
   };
 
   const sites: SiteStore = {
-    async create(organizationName, name, latitude, longitude) {
+    async create(organizationName, name, latitude, longitude, minTier = 'C') {
       const org = await pool.query(
         `INSERT INTO organizations (name) VALUES ($1)
          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -254,9 +271,9 @@ export function createStores(databaseUrl: string | null): Stores | null {
       );
       try {
         const site = await pool.query(
-          `INSERT INTO sites (organization_id, name, latitude, longitude)
-           VALUES ($1, $2, $3, $4) RETURNING id`,
-          [org.rows[0].id, name, latitude, longitude]
+          `INSERT INTO sites (organization_id, name, latitude, longitude, min_tier)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [org.rows[0].id, name, latitude, longitude, minTier]
         );
         return { id: Number(site.rows[0].id) };
       } catch (err) {
@@ -265,6 +282,25 @@ export function createStores(databaseUrl: string | null): Stores | null {
         }
         throw err;
       }
+    },
+    async getById(id) {
+      const result = await pool.query(
+        `SELECT id, latitude, longitude, rssi_floor_dbm, wifi_floor_dbm, gps_max_meters, min_tier
+         FROM sites WHERE id = $1`,
+        [id]
+      );
+      const row = result.rows[0];
+      return row
+        ? {
+            id: Number(row.id),
+            latitude: row.latitude,
+            longitude: row.longitude,
+            rssiFloorDbm: Number(row.rssi_floor_dbm),
+            wifiFloorDbm: Number(row.wifi_floor_dbm),
+            gpsMaxMeters: Number(row.gps_max_meters),
+            minTier: row.min_tier,
+          }
+        : null;
     },
   };
 

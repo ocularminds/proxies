@@ -98,6 +98,7 @@ export const adminCreateSite = z
     name: z.string().min(1).max(255),
     latitude: z.number().min(-90).max(90).optional(),
     longitude: z.number().min(-180).max(180).optional(),
+    minTier: z.enum(['A', 'B', 'C']).optional(),
   })
   .strict();
 
