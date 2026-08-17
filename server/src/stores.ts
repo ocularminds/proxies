@@ -34,6 +34,33 @@ export interface OrgStore {
   findByName(name: string): Promise<{ id: number } | null>;
 }
 
+export interface FleetDevice {
+  id: string;
+  kind: string;
+  name: string | null;
+  status: DeviceStatus;
+  siteId: number | null;
+  siteName: string | null;
+  userEmail: string | null;
+  lastSeenAt: Date | null;
+  lastBattery: number | null;
+  batteryTs: Date | null;
+}
+
+export interface FleetHost {
+  id: string;
+  name: string;
+  status: DeviceStatus;
+  siteId: number;
+  siteName: string;
+  lastSeenAt: Date | null;
+}
+
+export interface FleetStore {
+  listDevices(organizationId: number): Promise<FleetDevice[]>;
+  listHosts(organizationId: number): Promise<FleetHost[]>;
+}
+
 export interface RuleRecord {
   id: number;
   organizationId: number;
@@ -149,6 +176,7 @@ export interface Stores {
   telemetry: TelemetryStore;
   rules: RuleStore;
   orgs: OrgStore;
+  fleet: FleetStore;
   close(): Promise<void>;
 }
 
@@ -543,6 +571,55 @@ export function createStores(databaseUrl: string | null): Stores | null {
       async findByName(name: string) {
         const result = await pool.query(`SELECT id FROM organizations WHERE name = $1`, [name]);
         return result.rows[0] ? { id: Number(result.rows[0].id) } : null;
+      },
+    },
+    fleet: {
+      async listDevices(organizationId: number) {
+        const result = await pool.query(
+          `SELECT d.id, d.kind, d.name, d.status, d.site_id, s.name AS site_name,
+                  u.email AS user_email, d.last_seen_at, b.battery AS last_battery, b.ts AS battery_ts
+           FROM devices d
+           LEFT JOIN sites s ON s.id = d.site_id
+           LEFT JOIN users u ON u.id = d.user_id
+           LEFT JOIN LATERAL (
+             SELECT battery, ts FROM telemetry t
+             WHERE t.device_uuid = d.id AND t.battery IS NOT NULL
+             ORDER BY t.ts DESC LIMIT 1
+           ) b ON TRUE
+           WHERE COALESCE(u.organization_id, s.organization_id) = $1
+           ORDER BY d.last_seen_at ASC NULLS FIRST`,
+          [organizationId]
+        );
+        return result.rows.map((row) => ({
+          id: row.id,
+          kind: row.kind,
+          name: row.name,
+          status: row.status,
+          siteId: row.site_id === null ? null : Number(row.site_id),
+          siteName: row.site_name,
+          userEmail: row.user_email,
+          lastSeenAt: row.last_seen_at,
+          lastBattery: row.last_battery === null ? null : Number(row.last_battery),
+          batteryTs: row.battery_ts,
+        }));
+      },
+      async listHosts(organizationId: number) {
+        const result = await pool.query(
+          `SELECT h.id, h.name, h.status, h.site_id, s.name AS site_name, h.last_seen_at
+           FROM hosts h
+           JOIN sites s ON s.id = h.site_id
+           WHERE s.organization_id = $1
+           ORDER BY h.last_seen_at ASC NULLS FIRST`,
+          [organizationId]
+        );
+        return result.rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          status: row.status,
+          siteId: Number(row.site_id),
+          siteName: row.site_name,
+          lastSeenAt: row.last_seen_at,
+        }));
       },
     },
     async close() {
