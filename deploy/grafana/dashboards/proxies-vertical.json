@@ -1,0 +1,79 @@
+{
+  "uid": "proxies-vertical",
+  "title": "Vertical Kit",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "metric",
+        "label": "Metric",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "proxies-pg" },
+        "query": "SELECT DISTINCT type FROM telemetry ORDER BY 1",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "site",
+        "label": "Site",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "proxies-pg" },
+        "query": "SELECT name AS __text, id AS __value FROM sites ORDER BY 1",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Readings",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "proxies-pg" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "spanNulls": true } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS \"time\", value, type || ' · ' || COALESCE(d.name, LEFT(device_uuid::text, 8)) AS metric FROM telemetry t JOIN devices d ON d.id = t.device_uuid WHERE $__timeFilter(ts) AND t.type IN ($metric) AND (t.site_id IN ($site) OR t.site_id IS NULL) ORDER BY ts"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Latest value per device and metric",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "proxies-pg" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT DISTINCT ON (t.device_uuid, t.type) COALESCE(d.name, LEFT(t.device_uuid::text, 8)) AS device, t.type, t.value, t.unit, t.ts FROM telemetry t JOIN devices d ON d.id = t.device_uuid WHERE t.type IN ($metric) AND (t.site_id IN ($site) OR t.site_id IS NULL) ORDER BY t.device_uuid, t.type, t.ts DESC"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Alerts (labeled)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "proxies-pg" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT a.created_at, COALESCE(r.label, r.metric_type || ' ' || r.op || ' ' || r.threshold) AS alert, a.value, COALESCE(d.name, LEFT(a.device_uuid::text, 8)) AS device, a.delivered FROM alerts a JOIN rules r ON r.id = a.rule_id JOIN devices d ON d.id = a.device_uuid ORDER BY a.created_at DESC LIMIT 25"
+        }
+      ]
+    }
+  ]
+}

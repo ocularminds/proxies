@@ -54,6 +54,7 @@ every push. [deploy/](deploy/) boots the whole stack with one `docker compose up
 | Fleet health (`/admin/fleet`): last-seen, battery, staleness for every device and host | Implemented (P2.6) |
 | Presence as telemetry — validations land in the same stream as sensor data | Implemented (P2.10) |
 | One-box deploy: Timescale + server + mosquitto + provisioned Grafana dashboard | Implemented (P2.8) — first boot verified |
+| Vertical kits (agriculture · waste · factory · water): metric catalogs, labeled rule packs, `apply-kit`, simulator CLI, templated dashboard | Implemented (P3.0) |
 | Gateway hardware, BLE payload crypto, retention/aggregates, SMS/WhatsApp | Remaining — see roadmap |
 
 ## Repository layout

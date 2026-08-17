@@ -133,6 +133,13 @@ export const adminCreateRule = z
     op: z.enum(['gt', 'lt']),
     threshold: z.number().finite(),
     webhookUrl: z.string().url().max(2048).optional(),
+    label: z.string().min(1).max(255).optional(),
+  })
+  .strict();
+
+export const applyKitRequest = z
+  .object({
+    kit: z.enum(['agriculture', 'waste', 'factory', 'water']),
   })
   .strict();
 
