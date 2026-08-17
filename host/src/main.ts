@@ -4,10 +4,12 @@ import config from './config';
 import { initTray } from './tray';
 import { startBluetooth } from './bluetooth';
 import { getHostAddress } from './network';
+import { enrollHost, loadIdentity, type HostIdentity } from './identity';
 import type { HostEvent } from './events';
 
 let statusWindow: BrowserWindow | null = null;
 let quitting = false;
+let identity: HostIdentity | null = null;
 
 function createStatusWindow() {
   statusWindow = new BrowserWindow({
@@ -32,7 +34,12 @@ function createStatusWindow() {
   });
 
   statusWindow.webContents.on('did-finish-load', () => {
-    sendEvent({ type: 'host-info', hostAddress: getHostAddress(), serverUrl: config.serverUrl });
+    sendEvent({
+      type: 'host-info',
+      hostAddress: getHostAddress(),
+      serverUrl: config.serverUrl,
+      hostId: identity?.hostId ?? null,
+    });
   });
 }
 
@@ -42,7 +49,7 @@ function sendEvent(payload: HostEvent) {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createStatusWindow();
   initTray({
     onShowStatus: () => statusWindow?.show(),
@@ -51,7 +58,24 @@ app.whenReady().then(() => {
       app.quit();
     },
   });
-  startBluetooth({ onEvent: sendEvent });
+
+  const userDataDir = app.getPath('userData');
+  identity = loadIdentity(userDataDir);
+  if (!identity && config.enrollmentCode) {
+    try {
+      identity = await enrollHost(userDataDir, config.serverUrl, config.enrollmentCode);
+      sendEvent({ type: 'error', message: `Enrolled as host ${identity.hostId}.` });
+    } catch (err) {
+      sendEvent({ type: 'error', message: `Enrollment failed: ${(err as Error).message}` });
+    }
+  }
+  if (!identity) {
+    console.warn(
+      'Host has no identity: set HOST_ENROLLMENT_CODE to enroll. Validations will be refused.'
+    );
+  }
+
+  startBluetooth({ onEvent: sendEvent, getIdentity: () => identity });
 });
 
 app.on('window-all-closed', () => {

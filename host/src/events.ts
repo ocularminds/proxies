@@ -4,7 +4,7 @@ export interface ValidationResult {
 }
 
 export type HostEvent =
-  | { type: 'host-info'; hostAddress: string; serverUrl: string }
+  | { type: 'host-info'; hostAddress: string; serverUrl: string; hostId: string | null }
   | { type: 'state'; state: string }
   | { type: 'advertising'; name: string }
   | { type: 'connected'; clientAddress: string }

@@ -22,6 +22,8 @@ export interface AppConfig extends ValidationConfig {
 export interface ValidationLogEntry {
   deviceId: string;
   deviceUuid?: string | null;
+  hostId?: string | null;
+  siteId?: number | null;
   success: boolean;
   errorMessage: string | null;
 }

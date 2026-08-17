@@ -8,6 +8,8 @@ import bleno, {
 } from '@stoprocent/bleno';
 import config from './config';
 import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID } from './uuids';
+import { hostAttestSigningString } from './signing';
+import { signWithIdentity, type HostIdentity } from './identity';
 import type { HostEvent, ValidationResult } from './events';
 
 export type EventListener = (event: HostEvent) => void;
@@ -91,25 +93,52 @@ class MetricsCharacteristic extends Characteristic {
   }
 }
 
-async function validateWithServer(metrics: unknown): Promise<ValidationResult> {
+// Wraps the device's envelope in this host's attestation: proof the envelope
+// crossed this host's radio. rssi stays null until P1.5's sampling lands.
+async function validateWithServer(
+  envelope: unknown,
+  identity: HostIdentity
+): Promise<ValidationResult> {
+  const timestamp = new Date().toISOString();
+  const rssi: number | null = null;
+  const signature = signWithIdentity(
+    identity,
+    hostAttestSigningString(identity.hostId, timestamp, rssi, envelope)
+  );
   const response = await fetch(`${config.serverUrl}/validate-proximity`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(metrics),
+    body: JSON.stringify({
+      envelope,
+      attestation: { hostId: identity.hostId, timestamp, rssi, signature },
+    }),
     signal: AbortSignal.timeout(3000),
   });
   return (await response.json()) as ValidationResult;
 }
 
-export function startBluetooth({ onEvent }: { onEvent: EventListener }) {
+export interface BluetoothDeps {
+  onEvent: EventListener;
+  getIdentity: () => HostIdentity | null;
+}
+
+export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
   const resultCharacteristic = new ResultCharacteristic();
-  const metricsCharacteristic = new MetricsCharacteristic(async (metrics) => {
-    onEvent({ type: 'metrics-received', metrics });
+  const metricsCharacteristic = new MetricsCharacteristic(async (envelope) => {
+    onEvent({ type: 'metrics-received', metrics: envelope });
     let result: ValidationResult;
-    try {
-      result = await validateWithServer(metrics);
-    } catch (err) {
-      result = { success: false, message: `Server unreachable: ${(err as Error).message}` };
+    const identity = getIdentity();
+    if (!identity) {
+      result = {
+        success: false,
+        message: 'Host is not enrolled — ask an admin for an enrollment code.',
+      };
+    } else {
+      try {
+        result = await validateWithServer(envelope, identity);
+      } catch (err) {
+        result = { success: false, message: `Server unreachable: ${(err as Error).message}` };
+      }
     }
     resultCharacteristic.push(result);
     onEvent({ type: 'validation-result', result });

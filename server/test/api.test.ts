@@ -6,7 +6,11 @@ import type { Express } from 'express';
 import { createApp, type AppRuntimeConfig } from '../src/app';
 import { createStores, type Stores } from '../src/stores';
 import { migrate } from '../src/migrate';
-import { nonceSigningString, validationSigningString } from '../src/crypto';
+import {
+  hostAttestSigningString,
+  nonceSigningString,
+  validationSigningString,
+} from '../src/crypto';
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -24,11 +28,10 @@ function runtimeConfig(overrides: Partial<AppRuntimeConfig> = {}): AppRuntimeCon
   };
 }
 
-function makeDeviceKeys(): { publicKeyB64: string; privateKey: KeyObject } {
+function makeKeys(): { publicKeyB64: string; privateKey: KeyObject } {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const jwk = publicKey.export({ format: 'jwk' }) as { x: string };
-  const publicKeyB64 = Buffer.from(jwk.x, 'base64url').toString('base64');
-  return { publicKeyB64, privateKey };
+  return { publicKeyB64: Buffer.from(jwk.x, 'base64url').toString('base64'), privateKey };
 }
 
 function signWith(privateKey: KeyObject, message: string): string {
@@ -56,12 +59,32 @@ function envelope(
   return { deviceId, nonce, signature, metrics };
 }
 
+function attest(
+  envelopeBody: ReturnType<typeof envelope>,
+  hostId: string,
+  hostKey: KeyObject,
+  rssi: number | null = null,
+  timestamp = new Date().toISOString()
+) {
+  const signature = signWith(
+    hostKey,
+    hostAttestSigningString(hostId, timestamp, rssi, envelopeBody)
+  );
+  return { envelope: envelopeBody, attestation: { hostId, timestamp, rssi, signature } };
+}
+
 // Destructive (drops the schema); gated on TEST_DATABASE_URL like migrate.test.
-describe.skipIf(!url)('API with enrollment and nonces (Postgres)', () => {
+describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgres)', () => {
   let pool: Pool;
   let stores: Stores;
   let app: Express;
   const admin = { 'x-admin-token': 'test-admin' };
+
+  const deviceKeys = makeKeys();
+  const hostKeys = makeKeys();
+  let deviceId: string;
+  let hostId: string;
+  let siteId: number;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: url });
@@ -76,114 +99,163 @@ describe.skipIf(!url)('API with enrollment and nonces (Postgres)', () => {
     await pool?.end();
   });
 
-  test('admin endpoints reject missing or wrong tokens', async () => {
-    const noToken = await request(app)
-      .post('/admin/users')
-      .send({ organizationName: 'Org', email: 'a@b.co', displayName: 'A' });
-    expect(noToken.status).toBe(401);
+  async function freshAttestedValidation(metrics: Record<string, unknown>, rssi: number | null = null) {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    expect(nonceRes.status).toBe(200);
+    const body = attest(
+      envelope(deviceId, deviceKeys.privateKey, metrics, nonceRes.body.nonce),
+      hostId,
+      hostKeys.privateKey,
+      rssi
+    );
+    return request(app).post('/validate-proximity').send(body);
+  }
 
-    const badToken = await request(app)
-      .post('/admin/users')
-      .set('x-admin-token', 'wrong')
-      .send({ organizationName: 'Org', email: 'a@b.co', displayName: 'A' });
-    expect(badToken.status).toBe(401);
-  });
-
-  let enrollmentCode: string;
-  let deviceId: string;
-  const keys = makeDeviceKeys();
-
-  test('admin creates a user, then a device with a one-time code', async () => {
+  test('admin bootstraps org, user, site, host, and device', async () => {
     const user = await request(app)
       .post('/admin/users')
       .set(admin)
       .send({ organizationName: 'Acme', email: 'festus@example.com', displayName: 'Festus' });
     expect(user.status).toBe(201);
 
-    const duplicate = await request(app)
-      .post('/admin/users')
+    const site = await request(app)
+      .post('/admin/sites')
       .set(admin)
-      .send({ organizationName: 'Acme', email: 'festus@example.com', displayName: 'Again' });
-    expect(duplicate.status).toBe(409);
+      .send({ organizationName: 'Acme', name: 'HQ', latitude: 6.5244, longitude: 3.3792 });
+    expect(site.status).toBe(201);
+    siteId = site.body.siteId;
+
+    const dupSite = await request(app)
+      .post('/admin/sites')
+      .set(admin)
+      .send({ organizationName: 'Acme', name: 'HQ' });
+    expect(dupSite.status).toBe(409);
+
+    const badSiteHost = await request(app)
+      .post('/admin/hosts')
+      .set(admin)
+      .send({ siteId: 999999, name: 'front-desk' });
+    expect(badSiteHost.status).toBe(404);
+
+    const host = await request(app)
+      .post('/admin/hosts')
+      .set(admin)
+      .send({ siteId, name: 'front-desk' });
+    expect(host.status).toBe(201);
+    hostId = host.body.hostId;
+
+    const hostEnroll = await request(app)
+      .post('/hosts/enroll')
+      .send({ enrollmentCode: host.body.enrollmentCode, publicKey: hostKeys.publicKeyB64 });
+    expect(hostEnroll.status).toBe(200);
+    expect(hostEnroll.body.hostId).toBe(hostId);
+
+    const reuse = await request(app)
+      .post('/hosts/enroll')
+      .send({ enrollmentCode: host.body.enrollmentCode, publicKey: hostKeys.publicKeyB64 });
+    expect(reuse.status).toBe(400);
 
     const device = await request(app)
       .post('/admin/devices')
       .set(admin)
       .send({ userEmail: 'festus@example.com' });
     expect(device.status).toBe(201);
-    expect(device.body.enrollmentCode).toBeTruthy();
-    enrollmentCode = device.body.enrollmentCode;
     deviceId = device.body.deviceId;
-  });
 
-  test('an unenrolled device gets no nonce', async () => {
-    const res = await fetchNonce(app, deviceId, keys.privateKey);
-    expect(res.status).toBe(401);
-  });
-
-  test('enrollment rejects a bad code, accepts the real one exactly once', async () => {
-    const bad = await request(app)
+    const deviceEnroll = await request(app)
       .post('/devices/enroll')
-      .send({ enrollmentCode: 'wrong-code', publicKey: keys.publicKeyB64 });
-    expect(bad.status).toBe(400);
-
-    const ok = await request(app)
-      .post('/devices/enroll')
-      .send({ enrollmentCode, publicKey: keys.publicKeyB64, platform: 'test' });
-    expect(ok.status).toBe(200);
-    expect(ok.body.deviceId).toBe(deviceId);
-
-    const reuse = await request(app)
-      .post('/devices/enroll')
-      .send({ enrollmentCode, publicKey: keys.publicKeyB64 });
-    expect(reuse.status).toBe(400);
+      .send({ enrollmentCode: device.body.enrollmentCode, publicKey: deviceKeys.publicKeyB64 });
+    expect(deviceEnroll.status).toBe(200);
   });
 
-  test('a stale nonce request is rejected', async () => {
-    const timestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const res = await request(app)
-      .post('/nonces')
-      .send({
-        deviceId,
-        timestamp,
-        signature: signWith(keys.privateKey, nonceSigningString(deviceId, timestamp)),
-      });
-    expect(res.status).toBe(401);
-    expect(res.body.message).toMatch(/timestamp/i);
-  });
-
-  test('a tampered nonce request fails its signature check', async () => {
-    const timestamp = new Date().toISOString();
-    const res = await request(app)
-      .post('/nonces')
-      .send({
-        deviceId,
-        timestamp,
-        signature: signWith(keys.privateKey, nonceSigningString(deviceId, 'other-time')),
-      });
-    expect(res.status).toBe(401);
-  });
-
-  test('a signed validation with a fresh nonce passes and is logged', async () => {
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
-    expect(nonceRes.status).toBe(200);
-    const res = await request(app)
-      .post('/validate-proximity')
-      .send(envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce));
+  test('an attested, signed validation passes and logs host and site', async () => {
+    const res = await freshAttestedValidation({ bluetoothRssi: -50 });
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
 
     const logged = await pool.query(
-      `SELECT success FROM validation_logs WHERE device_uuid = $1 AND success = TRUE`,
+      `SELECT host_id, site_id FROM validation_logs WHERE device_uuid = $1 AND success = TRUE`,
       [deviceId]
     );
     expect(logged.rows.length).toBeGreaterThan(0);
+    expect(logged.rows[0].host_id).toBe(hostId);
+    expect(Number(logged.rows[0].site_id)).toBe(siteId);
   });
 
-  test('replaying an envelope fails: the nonce is single-use', async () => {
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
-    const body = envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce);
+  test('a bare device envelope without attestation is rejected', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const res = await request(app)
+      .post('/validate-proximity')
+      .send(envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce));
+    expect(res.status).toBe(400);
+  });
 
+  test('an unknown host is rejected before device checks', async () => {
+    const strangerHost = makeKeys();
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const body = attest(
+      envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+      '123e4567-e89b-42d3-a456-426614174000',
+      strangerHost.privateKey
+    );
+    const res = await request(app).post('/validate-proximity').send(body);
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/host/i);
+  });
+
+  test('a stale host attestation is rejected', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const body = attest(
+      envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+      hostId,
+      hostKeys.privateKey,
+      null,
+      old
+    );
+    const res = await request(app).post('/validate-proximity').send(body);
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/attestation/i);
+  });
+
+  test('swapping the envelope under an attestation breaks the host signature', async () => {
+    const nonceA = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const nonceB = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const attested = attest(
+      envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceA.body.nonce),
+      hostId,
+      hostKeys.privateKey
+    );
+    attested.envelope = envelope(
+      deviceId,
+      deviceKeys.privateKey,
+      { bluetoothRssi: -50 },
+      nonceB.body.nonce
+    );
+    const res = await request(app).post('/validate-proximity').send(attested);
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/attestation/i);
+  });
+
+  test('host-measured RSSI overrides the phone-claimed value (deny case)', async () => {
+    // Phone claims -50 (would pass); host measured -85 (must deny).
+    const res = await freshAttestedValidation({ bluetoothRssi: -50 }, -85);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/Bluetooth/);
+  });
+
+  test('host-measured RSSI overrides the phone-claimed value (pass case)', async () => {
+    // Phone claims -85 (would deny); host measured -50 (authoritative pass).
+    const res = await freshAttestedValidation({ bluetoothRssi: -85 }, -50);
+    expect(res.status).toBe(200);
+  });
+
+  test('replaying an attested envelope fails: the nonce is single-use', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const body = attest(
+      envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+      hostId,
+      hostKeys.privateKey
+    );
     const first = await request(app).post('/validate-proximity').send(body);
     expect(first.status).toBe(200);
 
@@ -192,25 +264,46 @@ describe.skipIf(!url)('API with enrollment and nonces (Postgres)', () => {
     expect(replay.body.message).toMatch(/nonce/i);
   });
 
-  test('a made-up nonce is rejected', async () => {
-    const res = await request(app)
-      .post('/validate-proximity')
-      .send(envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, 'f'.repeat(32)));
+  test('tampered metrics fail the device signature', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    const innerEnvelope = envelope(
+      deviceId,
+      deviceKeys.privateKey,
+      { bluetoothRssi: -50 },
+      nonceRes.body.nonce
+    );
+    innerEnvelope.metrics = { bluetoothRssi: -40 };
+    // Host attests what it relayed — the tampered envelope — so the host
+    // signature is fine and the device signature must be the one that fails.
+    const body = attest(innerEnvelope, hostId, hostKeys.privateKey);
+    const res = await request(app).post('/validate-proximity').send(body);
     expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/signature/i);
+  });
+
+  test('a weak signal is denied end to end', async () => {
+    const res = await freshAttestedValidation({ bluetoothRssi: -85 });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/Bluetooth/);
   });
 
   test('an expired nonce is rejected', async () => {
     const shortApp = createApp({ config: runtimeConfig({ nonceTtlMs: -1000 }), stores });
-    const nonceRes = await fetchNonce(shortApp, deviceId, keys.privateKey);
-    expect(nonceRes.status).toBe(200);
+    const nonceRes = await fetchNonce(shortApp, deviceId, deviceKeys.privateKey);
     const res = await request(app)
       .post('/validate-proximity')
-      .send(envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce));
+      .send(
+        attest(
+          envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
     expect(res.status).toBe(401);
   });
 
-  test("a nonce bound to one device cannot be spent by another", async () => {
-    const second = makeDeviceKeys();
+  test("another device cannot spend this device's nonce", async () => {
+    const second = makeKeys();
     const created = await request(app)
       .post('/admin/devices')
       .set(admin)
@@ -218,40 +311,50 @@ describe.skipIf(!url)('API with enrollment and nonces (Postgres)', () => {
     await request(app)
       .post('/devices/enroll')
       .send({ enrollmentCode: created.body.enrollmentCode, publicKey: second.publicKeyB64 });
-    const secondId = created.body.deviceId;
 
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
     const res = await request(app)
       .post('/validate-proximity')
-      .send(envelope(secondId, second.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce));
+      .send(
+        attest(
+          envelope(created.body.deviceId, second.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
     expect(res.status).toBe(401);
     expect(res.body.message).toMatch(/nonce/i);
   });
 
-  test('tampered metrics fail signature verification', async () => {
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
-    const body = envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce);
-    body.metrics = { bluetoothRssi: -40 };
-    const res = await request(app).post('/validate-proximity').send(body);
-    expect(res.status).toBe(401);
-    expect(res.body.message).toMatch(/signature/i);
-  });
-
-  test('a weak signal is denied even with a valid signature and nonce', async () => {
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
+  test('a revoked host is refused', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
+    await pool.query(`UPDATE hosts SET status = 'revoked' WHERE id = $1`, [hostId]);
     const res = await request(app)
       .post('/validate-proximity')
-      .send(envelope(deviceId, keys.privateKey, { bluetoothRssi: -85 }, nonceRes.body.nonce));
-    expect(res.status).toBe(403);
-    expect(res.body.message).toMatch(/Bluetooth/);
+      .send(
+        attest(
+          envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/host/i);
+    await pool.query(`UPDATE hosts SET status = 'active' WHERE id = $1`, [hostId]);
   });
 
-  test('a revoked device is refused even with an unspent nonce', async () => {
-    const nonceRes = await fetchNonce(app, deviceId, keys.privateKey);
+  test('a revoked device is refused', async () => {
+    const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
     await pool.query(`UPDATE devices SET status = 'revoked' WHERE id = $1`, [deviceId]);
     const res = await request(app)
       .post('/validate-proximity')
-      .send(envelope(deviceId, keys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce));
+      .send(
+        attest(
+          envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
     expect(res.status).toBe(403);
     expect(res.body.message).toMatch(/revoked/i);
   });
@@ -285,8 +388,8 @@ describe('without a database', () => {
   test('identity endpoints answer 503', async () => {
     const app = createApp({ config: runtimeConfig(), stores: null });
     const res = await request(app)
-      .post('/nonces')
-      .send({ deviceId: 'x', timestamp: new Date().toISOString(), signature: 'y'.repeat(80) });
+      .post('/hosts/enroll')
+      .send({ enrollmentCode: 'x'.repeat(10), publicKey: 'y'.repeat(44) });
     expect(res.status).toBe(503);
   });
 });

@@ -27,6 +27,30 @@ export interface UserStore {
   ): Promise<{ id: number }>;
 }
 
+export interface HostRecord {
+  id: string;
+  siteId: number;
+  publicKey: string | null;
+  status: DeviceStatus;
+}
+
+export interface HostStore {
+  getById(id: string): Promise<HostRecord | null>;
+  createPending(siteId: number, name: string, codeHash: string, expiresAt: Date): Promise<{ id: string }>;
+  enroll(codeHash: string, publicKey: string): Promise<HostRecord | null>;
+  markSeen(id: string): Promise<void>;
+}
+
+export interface SiteStore {
+  // Upserts the organization by name and creates the site under it.
+  create(
+    organizationName: string,
+    name: string,
+    latitude: number | null,
+    longitude: number | null
+  ): Promise<{ id: number } | null>;
+}
+
 export interface NonceStore {
   issue(deviceUuid: string, nonceHash: string, expiresAt: Date): Promise<void>;
   // Atomically marks the nonce used; false when unknown, expired, already
@@ -40,6 +64,8 @@ export interface Stores {
   devices: DeviceStore;
   users: UserStore;
   nonces: NonceStore;
+  hosts: HostStore;
+  sites: SiteStore;
   close(): Promise<void>;
 }
 
@@ -52,11 +78,18 @@ export function createStores(databaseUrl: string | null): Stores | null {
   const pool = new Pool({ connectionString: databaseUrl });
 
   const logs: LogStore = {
-    async logValidation({ deviceId, deviceUuid, success, errorMessage }: ValidationLogEntry) {
+    async logValidation({
+      deviceId,
+      deviceUuid,
+      hostId,
+      siteId,
+      success,
+      errorMessage,
+    }: ValidationLogEntry) {
       await pool.query(
-        `INSERT INTO validation_logs (device_id, device_uuid, success, error_message)
-         VALUES ($1, $2, $3, $4)`,
-        [deviceId, deviceUuid ?? null, success, errorMessage]
+        `INSERT INTO validation_logs (device_id, device_uuid, host_id, site_id, success, error_message)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [deviceId, deviceUuid ?? null, hostId ?? null, siteId ?? null, success, errorMessage]
       );
     },
     async close() {},
@@ -146,11 +179,77 @@ export function createStores(databaseUrl: string | null): Stores | null {
     },
   };
 
+  const hosts: HostStore = {
+    async getById(id) {
+      const result = await pool.query(
+        `SELECT id, site_id, public_key, status FROM hosts WHERE id = $1`,
+        [id]
+      );
+      const row = result.rows[0];
+      return row
+        ? { id: row.id, siteId: Number(row.site_id), publicKey: row.public_key, status: row.status }
+        : null;
+    },
+    async createPending(siteId, name, codeHash, expiresAt) {
+      const result = await pool.query(
+        `INSERT INTO hosts (site_id, name, enrollment_code_hash, enrollment_code_expires_at)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [siteId, name, codeHash, expiresAt]
+      );
+      return { id: result.rows[0].id };
+    },
+    async enroll(codeHash, publicKey) {
+      const result = await pool.query(
+        `UPDATE hosts
+         SET status = 'active', public_key = $2, enrolled_at = now(),
+             enrollment_code_hash = NULL, enrollment_code_expires_at = NULL
+         WHERE enrollment_code_hash = $1
+           AND enrollment_code_expires_at > now()
+           AND status = 'pending'
+         RETURNING id, site_id, public_key, status`,
+        [codeHash, publicKey]
+      );
+      const row = result.rows[0];
+      return row
+        ? { id: row.id, siteId: Number(row.site_id), publicKey: row.public_key, status: row.status }
+        : null;
+    },
+    async markSeen(id) {
+      await pool.query(`UPDATE hosts SET last_seen_at = now() WHERE id = $1`, [id]);
+    },
+  };
+
+  const sites: SiteStore = {
+    async create(organizationName, name, latitude, longitude) {
+      const org = await pool.query(
+        `INSERT INTO organizations (name) VALUES ($1)
+         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id`,
+        [organizationName]
+      );
+      try {
+        const site = await pool.query(
+          `INSERT INTO sites (organization_id, name, latitude, longitude)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [org.rows[0].id, name, latitude, longitude]
+        );
+        return { id: Number(site.rows[0].id) };
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505') {
+          return null; // duplicate site name within the organization
+        }
+        throw err;
+      }
+    },
+  };
+
   return {
     logs,
     devices,
     users,
     nonces,
+    hosts,
+    sites,
     async close() {
       await pool.end();
     },
