@@ -20,6 +20,10 @@ const config: AppConfig = {
     longitude: num(process.env.SITE_LONGITUDE, NaN),
   },
   databaseUrl: process.env.DATABASE_URL || null,
+  // Serve HTTPS directly when both are set (e.g. mkcert for dev); otherwise
+  // terminate TLS at a reverse proxy and set TRUST_PROXY.
+  tlsCertPath: process.env.TLS_CERT_PATH || null,
+  tlsKeyPath: process.env.TLS_KEY_PATH || null,
   // Gates the /admin endpoints; unset disables them entirely.
   adminToken: process.env.ADMIN_TOKEN || null,
   // Dev-only escape hatch: accept unsigned validation bodies when no database

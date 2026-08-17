@@ -181,6 +181,7 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `900000` / `300` | Per-IP request budget |
 | `RATE_LIMIT_ENROLL_MAX` | `10` | Stricter per-IP budget on the enroll endpoints |
 | `TRUST_PROXY` | `false` | Set behind a reverse proxy so limits see real client IPs |
+| `TLS_CERT_PATH` / `TLS_KEY_PATH` | unset | Serve HTTPS directly (dev: mkcert); otherwise terminate TLS at a proxy |
 
 ## Security model — read this
 

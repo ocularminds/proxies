@@ -27,7 +27,10 @@ import {
 import type { AppConfig } from './types';
 import type { Stores } from './stores';
 
-export type AppRuntimeConfig = Omit<AppConfig, 'port' | 'databaseUrl'>;
+export type AppRuntimeConfig = Omit<
+  AppConfig,
+  'port' | 'databaseUrl' | 'tlsCertPath' | 'tlsKeyPath'
+>;
 
 export interface AppDeps {
   config: AppRuntimeConfig;

@@ -13,6 +13,8 @@ export interface ValidationConfig {
 export interface AppConfig extends ValidationConfig {
   port: number;
   databaseUrl: string | null;
+  tlsCertPath: string | null;
+  tlsKeyPath: string | null;
   adminToken: string | null;
   allowUnsignedValidation: boolean;
   timestampToleranceMs: number;
