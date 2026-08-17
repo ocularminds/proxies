@@ -17,6 +17,12 @@ export interface AppConfig extends ValidationConfig {
   allowUnsignedValidation: boolean;
   timestampToleranceMs: number;
   nonceTtlMs: number;
+  trustProxy: boolean;
+  rateLimit: {
+    windowMs: number;
+    max: number;
+    enrollMax: number;
+  };
 }
 
 export interface ValidationLogEntry {

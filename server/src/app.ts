@@ -1,4 +1,6 @@
 import express, { type Express, type Request, type RequestHandler, type Response } from 'express';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
 import {
   adminCreateDevice,
   adminCreateHost,
@@ -54,6 +56,25 @@ function invalid(res: Response, issues: { path: PropertyKey[]; message: string }
 
 export function createApp({ config, stores }: AppDeps): Express {
   const app = express();
+  if (config.trustProxy) {
+    app.set('trust proxy', 1);
+  }
+  app.use(helmet());
+  app.use(
+    rateLimit({
+      windowMs: config.rateLimit.windowMs,
+      limit: config.rateLimit.max,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+    })
+  );
+  // Enrollment endpoints burn one-time codes; keep guessing expensive.
+  const enrollLimiter = rateLimit({
+    windowMs: config.rateLimit.windowMs,
+    limit: config.rateLimit.enrollMax,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
   app.use(express.json({ limit: '10kb' }));
 
   app.get('/health', (_req, res) => {
@@ -193,6 +214,7 @@ export function createApp({ config, stores }: AppDeps): Express {
 
   app.post(
     '/hosts/enroll',
+    enrollLimiter,
     wrap(async (req, res) => {
       const db = requireStores(res);
       if (!db) return;
@@ -218,6 +240,7 @@ export function createApp({ config, stores }: AppDeps): Express {
 
   app.post(
     '/devices/enroll',
+    enrollLimiter,
     wrap(async (req, res) => {
       const db = requireStores(res);
       if (!db) return;

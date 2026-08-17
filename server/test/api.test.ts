@@ -24,6 +24,8 @@ function runtimeConfig(overrides: Partial<AppRuntimeConfig> = {}): AppRuntimeCon
     allowUnsignedValidation: false,
     timestampToleranceMs: 300_000,
     nonceTtlMs: 120_000,
+    trustProxy: false,
+    rateLimit: { windowMs: 60_000, max: 100_000, enrollMax: 100_000 },
     ...overrides,
   };
 }
@@ -391,5 +393,34 @@ describe('without a database', () => {
       .post('/hosts/enroll')
       .send({ enrollmentCode: 'x'.repeat(10), publicKey: 'y'.repeat(44) });
     expect(res.status).toBe(503);
+  });
+});
+
+describe('rate limiting', () => {
+  test('the global limiter answers 429 past the window budget', async () => {
+    const app = createApp({
+      config: runtimeConfig({ rateLimit: { windowMs: 60_000, max: 3, enrollMax: 100 } }),
+      stores: null,
+    });
+    for (let i = 0; i < 3; i++) {
+      const ok = await request(app).get('/health');
+      expect(ok.status).toBe(200);
+    }
+    const blocked = await request(app).get('/health');
+    expect(blocked.status).toBe(429);
+  });
+
+  test('the enrollment limiter is stricter than the global one', async () => {
+    const app = createApp({
+      config: runtimeConfig({ rateLimit: { windowMs: 60_000, max: 100, enrollMax: 2 } }),
+      stores: null,
+    });
+    const body = { enrollmentCode: 'x'.repeat(10), publicKey: 'y'.repeat(44) };
+    for (let i = 0; i < 2; i++) {
+      const res = await request(app).post('/devices/enroll').send(body);
+      expect(res.status).toBe(503);
+    }
+    const blocked = await request(app).post('/devices/enroll').send(body);
+    expect(blocked.status).toBe(429);
   });
 });

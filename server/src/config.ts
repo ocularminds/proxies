@@ -29,6 +29,14 @@ const config: AppConfig = {
   timestampToleranceMs: num(process.env.TIMESTAMP_TOLERANCE_MS, 300_000),
   // Validity window of an issued single-use validation nonce.
   nonceTtlMs: num(process.env.NONCE_TTL_MS, 120_000),
+  // Set true only when deployed behind a reverse proxy, so rate limits see
+  // real client addresses.
+  trustProxy: process.env.TRUST_PROXY === 'true',
+  rateLimit: {
+    windowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+    max: num(process.env.RATE_LIMIT_MAX, 300),
+    enrollMax: num(process.env.RATE_LIMIT_ENROLL_MAX, 10),
+  },
 };
 
 export default config;
