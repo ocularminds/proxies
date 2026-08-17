@@ -32,7 +32,7 @@ platform's first application, never a fork.
 | Network validation ("same network as the mobile device") | ✅ P1.7 — phone must fetch a host-signed token from the host's LAN-bound listener; verified server-side, logged per validation | done |
 | BLE-measured proximity | ◐ link real (host advertises, phone submits, verdict notified) | P0 done · trust: P1.4 + P1.5 |
 | Wi-Fi / GPS fallback when BLE unavailable | ◐ collected as advisory; never faked | P1.11 (assurance tiers) |
-| QR scanning gated on validation | ❌ not built yet | P1.8 (signed session tokens) |
+| QR scanning gated on validation | ✅ P1.8 — approval mints a single-use 2-min session; host renders the QR; `/sessions/redeem` claims it atomically | done |
 | Error reporting | ◐ verdicts surfaced on phone + host; logged to Postgres | P1.11 (taxonomy) |
 | GitHub Actions testing & deployment | ✅ lint + typecheck + tests + audit on every push | P0 done · deploy: Phase 2 |
 
@@ -49,7 +49,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | G4 | BLE bridge used nonexistent noble APIs | — | ✅ P0 (real GATT service; hardware smoke test = M1) |
 | G5 | Both ends were BLE centrals — could never connect | — | ✅ P0 (host = peripheral via bleno, phone = central) |
 | G6 | Mobile fragments didn't compile; no project scaffolding | — | ✅ P0 (Capacitor + Vite + strict TS) |
-| G7 | Dead IPC wiring; no renderer; no QR UI | — | ◐ status UI wired (P0); QR UI in P1.8 |
+| G7 | Dead IPC wiring; no renderer; no QR UI | — | ✅ P1.8 — host renders the session QR; redemption by the org's scanner via `/sessions/redeem` |
 | G8 | Database schema orphaned; nothing logged | — | ✅ P0 (pg store; set `DATABASE_URL`) |
 | G9 | README described a fictional repo; MIT vs Apache-2.0 conflict | — | ✅ P0 (Apache-2.0 everywhere) |
 | G10 | `geolib` used but never declared (found during fix) | — | ✅ P0 (inline haversine) |
@@ -106,7 +106,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 | P1.5 ✅ | Host-measured RSSI: sampled every 500 ms per connection via `updateRssiAsync`, median of last 10 attested; graceful null on radios that don't report RSSI; TX-power calibration + hysteresis deferred to hardware tuning (M1) | S2, P3 |
 | P1.6 | Host↔server persistent WebSocket registry (liveness without inbound probes) | S4 class |
 | P1.7 ✅ | Same-network proof: host serves signed 2-min tokens on a LAN-bound listener (advertised via a BLE read characteristic); token bound into the device's signed envelope; invalid = hard fail, absent = logged (`lan_verified`), scored by P1.11 tiers | contract |
-| P1.8 | QR gate: signed short-lived session token bound to device + nonce; host unlock UI | contract, G7 |
+| P1.8 ✅ | QR gate: approval mints a DB-backed single-use session (2 min TTL) bound to device/host/site; host renders the QR (main-process generation, data-URL to renderer); `/sessions/redeem` claims atomically and returns user/device/site | contract, G7 |
 | P1.9 | TLS on all HTTP; app-layer AES-GCM over BLE under enrolled keys; reject un-enrolled peers | S6, S7 |
 | P1.10 ✅ | Rate limiting (per-IP global budget + stricter enroll budget, RFC draft-7 headers, `TRUST_PROXY` switch) + helmet | P4 |
 | P1.11 | Assurance tiers (A: BLE challenge–response · B: LAN token + attested GPS · C: deny) + error taxonomy, logged per decision | S1 class, contract |
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | P1.8 shipped: the QR gate the product was named for. A successful validation mints a DB-backed, single-use session (2 min TTL, bound to device/host/site); the host generates the QR in the main process and the status window displays it until expiry; `/sessions/redeem` (admin-token gated, for the org's scanning system) claims it atomically — replays and expired sessions answer 400 — returning user email, device, and site for the consuming system. |
 | 2026-08-17 | P1.7 shipped: same-network proof. The host binds an HTTP listener to its LAN address only and serves signed 2-minute tokens; the phone learns the listener URL from a new BLE read characteristic, fetches a token, and binds it into its signed envelope (the signing string gained a LAN-token slot — literal `null` when absent). Server verifies host binding, freshness, and signature; invalid tokens deny hard, absent tokens are recorded as `lan_verified = false` for tier policy (P1.11). Note: the LAN URL is readable by any connected central (private-IP disclosure, accepted until P1.9/P2.7 peer gating). |
 | 2026-08-17 | P1.10 shipped: helmet security headers plus per-IP rate limits — a global request budget and a stricter one on the code-burning enroll endpoints; `TRUST_PROXY` documented for reverse-proxy deployments. |
 | 2026-08-17 | P1.5 shipped: the host now measures. While a central is connected the host samples connection RSSI every 500 ms (`updateRssiAsync`) and attests the median of the last 10 readings; radios that don't report RSSI degrade to a null attestation (phone value stays advisory). With P1.4's authority rule this completes the S2 inversion in code — remaining: calibration and hysteresis tuning against real hardware at M1. |

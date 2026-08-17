@@ -26,6 +26,7 @@ function runtimeConfig(overrides: Partial<AppRuntimeConfig> = {}): AppRuntimeCon
     timestampToleranceMs: 300_000,
     nonceTtlMs: 120_000,
     lanTokenTtlMs: 120_000,
+    sessionTtlMs: 120_000,
     trustProxy: false,
     rateLimit: { windowMs: 60_000, max: 100_000, enrollMax: 100_000 },
     ...overrides,
@@ -195,9 +196,30 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     expect(deviceEnroll.status).toBe(200);
   });
 
-  test('an attested, signed validation passes and logs host and site', async () => {
+  test('an attested, signed validation passes, logs host and site, and mints a session', async () => {
     const res = await freshAttestedValidation({ bluetoothRssi: -50 });
     expect(res.status).toBe(200);
+    expect(res.body.session?.id).toBeTruthy();
+
+    const redeem = await request(app)
+      .post('/sessions/redeem')
+      .set(admin)
+      .send({ sessionId: res.body.session.id });
+    expect(redeem.status).toBe(200);
+    expect(redeem.body.userEmail).toBe('festus@example.com');
+    expect(redeem.body.deviceUuid).toBe(deviceId);
+    expect(Number(redeem.body.siteId)).toBe(siteId);
+
+    const again = await request(app)
+      .post('/sessions/redeem')
+      .set(admin)
+      .send({ sessionId: res.body.session.id });
+    expect(again.status).toBe(400);
+
+    const unauthed = await request(app)
+      .post('/sessions/redeem')
+      .send({ sessionId: res.body.session.id });
+    expect(unauthed.status).toBe(401);
 
     const logged = await pool.query(
       `SELECT host_id, site_id FROM validation_logs WHERE device_uuid = $1 AND success = TRUE`,
@@ -261,6 +283,26 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     const res = await request(app).post('/validate-proximity').send(attested);
     expect(res.status).toBe(401);
     expect(res.body.message).toMatch(/attestation/i);
+  });
+
+  test('an expired session cannot be redeemed', async () => {
+    const shortApp = createApp({ config: runtimeConfig({ sessionTtlMs: -1000 }), stores });
+    const nonceRes = await fetchNonce(shortApp, deviceId, deviceKeys.privateKey);
+    const res = await request(shortApp)
+      .post('/validate-proximity')
+      .send(
+        attest(
+          envelope(deviceId, deviceKeys.privateKey, { bluetoothRssi: -50 }, nonceRes.body.nonce),
+          hostId,
+          hostKeys.privateKey
+        )
+      );
+    expect(res.status).toBe(200);
+    const redeem = await request(app)
+      .post('/sessions/redeem')
+      .set(admin)
+      .send({ sessionId: res.body.session.id });
+    expect(redeem.status).toBe(400);
   });
 
   test('a valid LAN token verifies and is logged as same-network', async () => {

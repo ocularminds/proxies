@@ -1,6 +1,7 @@
 export interface ValidationResult {
   success: boolean;
   message: string;
+  session?: { id: string; expiresInMs: number } | null;
 }
 
 export type HostEvent =
@@ -12,5 +13,6 @@ export type HostEvent =
   | { type: 'metrics-received'; metrics: unknown }
   | { type: 'rssi-measured'; rssi: number | null }
   | { type: 'lan'; url: string }
+  | { type: 'session'; dataUrl: string; expiresInMs: number }
   | { type: 'validation-result'; result: ValidationResult }
   | { type: 'error'; message: string };

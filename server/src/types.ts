@@ -18,6 +18,7 @@ export interface AppConfig extends ValidationConfig {
   timestampToleranceMs: number;
   nonceTtlMs: number;
   lanTokenTtlMs: number;
+  sessionTtlMs: number;
   trustProxy: boolean;
   rateLimit: {
     windowMs: number;
