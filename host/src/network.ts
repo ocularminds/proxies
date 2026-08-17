@@ -1,15 +1,13 @@
-const os = require('os');
+import os from 'node:os';
 
-function getHostAddress() {
+export function getHostAddress(): string {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
+    for (const iface of interfaces[name] ?? []) {
       if (iface.family === 'IPv4' && !iface.internal) {
         return iface.address;
       }
     }
   }
-  return '127.0.0.1'; // Fallback to localhost
+  return '127.0.0.1';
 }
-
-module.exports = { getHostAddress };
