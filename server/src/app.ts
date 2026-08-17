@@ -16,6 +16,7 @@ import {
   generateEnrollmentCode,
   generateNonce,
   hostAttestSigningString,
+  lanTokenSigningString,
   nonceSigningString,
   secretsEqual,
   sha256Hex,
@@ -336,12 +337,13 @@ export function createApp({ config, stores }: AppDeps): Express {
       const parsed = attestedValidation.safeParse(req.body);
       if (!parsed.success) return invalid(res, parsed.error.issues);
       const { envelope, attestation } = parsed.data;
-      const { deviceId, nonce, signature, metrics } = envelope;
+      const { deviceId, nonce, lanToken, signature, metrics } = envelope;
 
       // The audit row is written before the response goes out; a log failure
       // is reported but does not take validation down.
       let logHostId: string | null = null;
       let logSiteId: number | null = null;
+      let lanVerified = false;
       const record = async (success: boolean, errorMessage: string | null, deviceUuid?: string) => {
         try {
           await stores.logs.logValidation({
@@ -349,6 +351,7 @@ export function createApp({ config, stores }: AppDeps): Express {
             deviceUuid: deviceUuid ?? null,
             hostId: logHostId,
             siteId: logSiteId,
+            lanVerified,
             success,
             errorMessage,
           });
@@ -387,6 +390,38 @@ export function createApp({ config, stores }: AppDeps): Express {
         .markSeen(host.id)
         .catch((err: Error) => console.error('Failed to update host last_seen:', err.message));
 
+      // Same-network proof: a LAN token is optional, but a bad one is a hard
+      // failure — an invalid proof is worse than none.
+      if (lanToken !== undefined) {
+        let parsedToken: { hostId?: string; issuedAt?: string; sig?: string };
+        try {
+          parsedToken = JSON.parse(Buffer.from(lanToken, 'base64').toString('utf8'));
+        } catch {
+          return deny(401, 'Malformed same-network token.');
+        }
+        if (
+          parsedToken.hostId !== host.id ||
+          typeof parsedToken.issuedAt !== 'string' ||
+          typeof parsedToken.sig !== 'string'
+        ) {
+          return deny(401, 'Same-network token does not match the attesting host.');
+        }
+        const tokenAge = Math.abs(Date.now() - Date.parse(parsedToken.issuedAt));
+        if (!(tokenAge <= config.lanTokenTtlMs)) {
+          return deny(401, 'Expired same-network token.');
+        }
+        if (
+          !verifyEd25519(
+            host.publicKey,
+            lanTokenSigningString(parsedToken.hostId, parsedToken.issuedAt),
+            parsedToken.sig
+          )
+        ) {
+          return deny(401, 'Invalid same-network token signature.');
+        }
+        lanVerified = true;
+      }
+
       const device = await stores.devices.getById(deviceId);
       if (!device) return deny(401, 'Unknown device.');
       if (device.status === 'revoked') return deny(403, 'Device is revoked.', device.id);
@@ -401,7 +436,7 @@ export function createApp({ config, stores }: AppDeps): Express {
         return deny(401, 'Invalid, expired, or already-used nonce.', device.id);
       }
 
-      const signedString = validationSigningString(deviceId, nonce, metrics);
+      const signedString = validationSigningString(deviceId, nonce, lanToken ?? null, metrics);
       if (!verifyEd25519(device.publicKey, signedString, signature)) {
         return deny(401, 'Invalid signature.', device.id);
       }

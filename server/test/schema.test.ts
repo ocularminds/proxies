@@ -52,8 +52,15 @@ describe('canonicalJson', () => {
   });
 
   test('signing string is stable across key order', () => {
-    const a = validationSigningString('id', 't', { x: 1, y: { b: 2, a: 3 } });
-    const b = validationSigningString('id', 't', { y: { a: 3, b: 2 }, x: 1 });
+    const a = validationSigningString('id', 't', null, { x: 1, y: { b: 2, a: 3 } });
+    const b = validationSigningString('id', 't', null, { y: { a: 3, b: 2 }, x: 1 });
     expect(a).toBe(b);
+  });
+
+  test('the LAN-token slot distinguishes absent from present', () => {
+    const absent = validationSigningString('id', 't', null, { x: 1 });
+    const present = validationSigningString('id', 't', 'tok', { x: 1 });
+    expect(absent).toContain('\nnull\n');
+    expect(absent).not.toBe(present);
   });
 });

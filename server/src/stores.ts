@@ -83,13 +83,22 @@ export function createStores(databaseUrl: string | null): Stores | null {
       deviceUuid,
       hostId,
       siteId,
+      lanVerified,
       success,
       errorMessage,
     }: ValidationLogEntry) {
       await pool.query(
-        `INSERT INTO validation_logs (device_id, device_uuid, host_id, site_id, success, error_message)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [deviceId, deviceUuid ?? null, hostId ?? null, siteId ?? null, success, errorMessage]
+        `INSERT INTO validation_logs (device_id, device_uuid, host_id, site_id, lan_verified, success, error_message)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          deviceId,
+          deviceUuid ?? null,
+          hostId ?? null,
+          siteId ?? null,
+          lanVerified ?? false,
+          success,
+          errorMessage,
+        ]
       );
     },
     async close() {},

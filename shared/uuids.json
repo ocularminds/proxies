@@ -1,5 +1,6 @@
 {
   "serviceUuid": "8bb911ea-7ced-4d28-b348-f17047e06b06",
   "metricsCharacteristicUuid": "0ae385ee-e396-4e9a-adff-3692cc696d58",
-  "resultCharacteristicUuid": "7d90d0c0-09a0-45b8-b873-e7110f3d5fb9"
+  "resultCharacteristicUuid": "7d90d0c0-09a0-45b8-b873-e7110f3d5fb9",
+  "lanInfoCharacteristicUuid": "6e78e131-cb6f-4d49-b74f-c19031042c0f"
 }

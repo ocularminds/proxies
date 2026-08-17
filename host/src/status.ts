@@ -17,6 +17,7 @@ interface StatusEventPayload {
   serverUrl?: string;
   hostId?: string | null;
   rssi?: number | null;
+  url?: string;
 }
 
 interface Window {
@@ -42,6 +43,8 @@ function describe(payload: StatusEventPayload): string {
       return payload.rssi === null || payload.rssi === undefined
         ? 'Host RSSI unavailable — radio does not report it; phone value stays advisory'
         : `Host-measured RSSI ${payload.rssi} dBm (windowed median)`;
+    case 'lan':
+      return `Serving same-network tokens at ${payload.url}`;
     case 'validation-result':
       return payload.result?.message ?? 'Validation result';
     case 'error':

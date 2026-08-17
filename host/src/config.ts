@@ -7,6 +7,7 @@ export interface HostConfig {
   serverUrl: string;
   hostName: string;
   enrollmentCode: string | null;
+  lanPort: number;
 }
 
 const config: HostConfig = {
@@ -15,6 +16,8 @@ const config: HostConfig = {
   hostName: (process.env.HOST_NAME || os.hostname()).slice(0, 20),
   // One-time code from an admin; consumed on first start, then ignored.
   enrollmentCode: process.env.HOST_ENROLLMENT_CODE || null,
+  // Port for the LAN-only same-network token listener.
+  lanPort: Number(process.env.HOST_LAN_PORT) || 47814,
 };
 
 export default config;

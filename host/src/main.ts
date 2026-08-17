@@ -5,11 +5,13 @@ import { initTray } from './tray';
 import { startBluetooth } from './bluetooth';
 import { getHostAddress } from './network';
 import { enrollHost, loadIdentity, type HostIdentity } from './identity';
+import { startLanServer, type LanServer } from './lanServer';
 import type { HostEvent } from './events';
 
 let statusWindow: BrowserWindow | null = null;
 let quitting = false;
 let identity: HostIdentity | null = null;
+let lanServer: LanServer | null = null;
 
 function createStatusWindow() {
   statusWindow = new BrowserWindow({
@@ -73,9 +75,23 @@ app.whenReady().then(async () => {
     console.warn(
       'Host has no identity: set HOST_ENROLLMENT_CODE to enroll. Validations will be refused.'
     );
+  } else {
+    try {
+      lanServer = await startLanServer(identity, config.lanPort);
+      sendEvent({ type: 'lan', url: lanServer.url });
+    } catch (err) {
+      sendEvent({
+        type: 'error',
+        message: `LAN token listener failed to start: ${(err as Error).message}`,
+      });
+    }
   }
 
-  startBluetooth({ onEvent: sendEvent, getIdentity: () => identity });
+  startBluetooth({
+    onEvent: sendEvent,
+    getIdentity: () => identity,
+    getLanUrl: () => lanServer?.url ?? null,
+  });
 });
 
 app.on('window-all-closed', () => {

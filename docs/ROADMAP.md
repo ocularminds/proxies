@@ -29,7 +29,7 @@ platform's first application, never a fork.
 
 | Promise | Status | Delivered by |
 | --- | --- | --- |
-| Network validation ("same network as the mobile device") | ❌ old SSRF probe removed; real proof pending | P1.7 (LAN-served token) |
+| Network validation ("same network as the mobile device") | ✅ P1.7 — phone must fetch a host-signed token from the host's LAN-bound listener; verified server-side, logged per validation | done |
 | BLE-measured proximity | ◐ link real (host advertises, phone submits, verdict notified) | P0 done · trust: P1.4 + P1.5 |
 | Wi-Fi / GPS fallback when BLE unavailable | ◐ collected as advisory; never faked | P1.11 (assurance tiers) |
 | QR scanning gated on validation | ❌ not built yet | P1.8 (signed session tokens) |
@@ -105,7 +105,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 | P1.4 ✅ | Host attestation: sites + hosts enroll (one-time codes, Ed25519); every validation must arrive as `{envelope, attestation}` — the host counter-signs the envelope hash + its measured RSSI; audit rows gain host + site; host-measured RSSI authoritative server-side | S2 ◐ |
 | P1.5 ✅ | Host-measured RSSI: sampled every 500 ms per connection via `updateRssiAsync`, median of last 10 attested; graceful null on radios that don't report RSSI; TX-power calibration + hysteresis deferred to hardware tuning (M1) | S2, P3 |
 | P1.6 | Host↔server persistent WebSocket registry (liveness without inbound probes) | S4 class |
-| P1.7 | Same-network proof: short-lived token served only on the host's LAN interface; phone fetches and returns it | contract |
+| P1.7 ✅ | Same-network proof: host serves signed 2-min tokens on a LAN-bound listener (advertised via a BLE read characteristic); token bound into the device's signed envelope; invalid = hard fail, absent = logged (`lan_verified`), scored by P1.11 tiers | contract |
 | P1.8 | QR gate: signed short-lived session token bound to device + nonce; host unlock UI | contract, G7 |
 | P1.9 | TLS on all HTTP; app-layer AES-GCM over BLE under enrolled keys; reject un-enrolled peers | S6, S7 |
 | P1.10 ✅ | Rate limiting (per-IP global budget + stricter enroll budget, RFC draft-7 headers, `TRUST_PROXY` switch) + helmet | P4 |
@@ -175,6 +175,7 @@ manual override — before any remote control ships.
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
 | 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
+| 2026-08-17 | P1.7 shipped: same-network proof. The host binds an HTTP listener to its LAN address only and serves signed 2-minute tokens; the phone learns the listener URL from a new BLE read characteristic, fetches a token, and binds it into its signed envelope (the signing string gained a LAN-token slot — literal `null` when absent). Server verifies host binding, freshness, and signature; invalid tokens deny hard, absent tokens are recorded as `lan_verified = false` for tier policy (P1.11). Note: the LAN URL is readable by any connected central (private-IP disclosure, accepted until P1.9/P2.7 peer gating). |
 | 2026-08-17 | P1.10 shipped: helmet security headers plus per-IP rate limits — a global request budget and a stricter one on the code-burning enroll endpoints; `TRUST_PROXY` documented for reverse-proxy deployments. |
 | 2026-08-17 | P1.5 shipped: the host now measures. While a central is connected the host samples connection RSSI every 500 ms (`updateRssiAsync`) and attests the median of the last 10 readings; radios that don't report RSSI degrade to a null attestation (phone value stays advisory). With P1.4's authority rule this completes the S2 inversion in code — remaining: calibration and hysteresis tuning against real hardware at M1. |
 | 2026-08-17 | P1.4 shipped: host attestation. Sites and hosts get admin bootstrap + one-time-code enrollment (host identity persisted in Electron userData, private key on-machine). `/validate-proximity` now only accepts `{envelope, attestation}` where the enrolled host counter-signs `hostId + timestamp + rssi + sha256(envelope)` — an envelope that never crossed an enrolled host's radio is dead on arrival, and the phone can no longer reach the server alone. Audit rows now carry `host_id` and `site_id`. Server treats host-measured RSSI as authoritative over the phone's claim (sampling lands in P1.5 — `@stoprocent/bleno` exposes `updateRssiAsync`). |

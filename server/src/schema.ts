@@ -21,6 +21,7 @@ export const validationEnvelope = z
   .object({
     deviceId: z.string().uuid(),
     nonce: z.string().min(16).max(128),
+    lanToken: z.string().max(2048).optional(),
     signature: z.string().min(64).max(512),
     metrics: metricsSchema,
   })

@@ -19,6 +19,12 @@ export function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
 }
 
+// The string a host signs inside the LAN token served on its LAN-only
+// listener (same-network proof).
+export function lanTokenSigningString(hostId: string, issuedAt: string): string {
+  return `proxies-lan\n${hostId}\n${issuedAt}`;
+}
+
 // The string a host signs to attest it relayed a device envelope over BLE.
 export function hostAttestSigningString(
   hostId: string,

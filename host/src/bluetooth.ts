@@ -2,12 +2,13 @@ import bleno, {
   Characteristic,
   PrimaryService,
   type ConnectionHandle,
+  type ReadRequestCallback,
   type State,
   type UpdateValueCallback,
   type WriteRequestCallback,
 } from '@stoprocent/bleno';
 import config from './config';
-import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID } from './uuids';
+import { SERVICE_UUID, METRICS_CHAR_UUID, RESULT_CHAR_UUID, LAN_INFO_CHAR_UUID } from './uuids';
 import { hostAttestSigningString } from './signing';
 import { signWithIdentity, type HostIdentity } from './identity';
 import type { HostEvent, ValidationResult } from './events';
@@ -174,12 +175,29 @@ async function validateWithServer(
   return (await response.json()) as ValidationResult;
 }
 
+// Read characteristic: tells a connected phone where the LAN-token listener
+// lives so it can collect the same-network proof.
+class LanInfoCharacteristic extends Characteristic {
+  constructor(private readonly getLanUrl: () => string | null) {
+    super({ uuid: LAN_INFO_CHAR_UUID, properties: ['read'] });
+  }
+
+  override onReadRequest(_handle: ConnectionHandle, offset: number, callback: ReadRequestCallback) {
+    const payload = Buffer.from(JSON.stringify({ url: this.getLanUrl() }));
+    if (offset > payload.length) {
+      return callback(this.RESULT_UNLIKELY_ERROR);
+    }
+    callback(this.RESULT_SUCCESS, payload.subarray(offset));
+  }
+}
+
 export interface BluetoothDeps {
   onEvent: EventListener;
   getIdentity: () => HostIdentity | null;
+  getLanUrl: () => string | null;
 }
 
-export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
+export function startBluetooth({ onEvent, getIdentity, getLanUrl }: BluetoothDeps) {
   const sampler = new RssiSampler();
   const resultCharacteristic = new ResultCharacteristic();
   const metricsCharacteristic = new MetricsCharacteristic(async (envelope) => {
@@ -220,7 +238,11 @@ export function startBluetooth({ onEvent, getIdentity }: BluetoothDeps) {
     bleno.setServices([
       new PrimaryService({
         uuid: SERVICE_UUID,
-        characteristics: [metricsCharacteristic, resultCharacteristic],
+        characteristics: [
+          metricsCharacteristic,
+          resultCharacteristic,
+          new LanInfoCharacteristic(getLanUrl),
+        ],
       }),
     ]);
     onEvent({ type: 'advertising', name: config.hostName });

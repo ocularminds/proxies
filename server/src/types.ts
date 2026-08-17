@@ -17,6 +17,7 @@ export interface AppConfig extends ValidationConfig {
   allowUnsignedValidation: boolean;
   timestampToleranceMs: number;
   nonceTtlMs: number;
+  lanTokenTtlMs: number;
   trustProxy: boolean;
   rateLimit: {
     windowMs: number;
@@ -30,6 +31,7 @@ export interface ValidationLogEntry {
   deviceUuid?: string | null;
   hostId?: string | null;
   siteId?: number | null;
+  lanVerified?: boolean;
   success: boolean;
   errorMessage: string | null;
 }

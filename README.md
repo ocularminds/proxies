@@ -40,6 +40,7 @@ The whole codebase is **TypeScript** (strict), Apache-2.0 licensed, and CI-check
 | Validation audit logging to Postgres | Implemented (`DATABASE_URL`) |
 | Device enrollment: per-device Ed25519 keys, one-time codes, signed requests | Implemented (P1.2) |
 | Host attestation: envelopes must cross an enrolled host's radio; host-measured RSSI is authoritative when present | Implemented (P1.4) |
+| Same-network proof: host-signed token served on its LAN-only listener | Implemented (P1.7) |
 | Wi-Fi / GPS as advisory fallback signals | Collected when available; assurance tiers in Phase 1 |
 | Trustworthy proximity (host-measured RSSI, nonce challenge) | Phase 1 — see roadmap |
 | Same-network proof (LAN-served token) | Phase 1 |
@@ -111,12 +112,15 @@ curl -s -X POST localhost:3000/admin/devices -H "x-admin-token: $ADMIN_TOKEN" \
 The response contains a 24-hour, single-use `enrollmentCode`. In the mobile
 app, open **Enrollment**, point it at the server's LAN URL, and enter the code
 — the phone generates a non-extractable keypair and registers its public key.
-From then on every validation is a two-step protocol: the phone requests a
-**single-use nonce** (signed request, ±5 min timestamp window), then submits a
-signed envelope `{deviceId, nonce, signature, metrics}` over BLE via the host.
-Nonces expire after 2 minutes and die on first use, so captured envelopes
-cannot be replayed. Unsigned requests are rejected (dev-only escape hatch:
-`ALLOW_UNSIGNED_VALIDATION=true` with no database).
+From then on every validation is a three-step protocol: the phone requests a
+**single-use nonce** (signed request, ±5 min timestamp window), collects a
+**same-network token** from the host's LAN-only listener (advertised over BLE;
+reachability of a LAN-bound address is the network proof), and submits a
+signed envelope `{deviceId, nonce, lanToken?, signature, metrics}` over BLE.
+The host wraps it in its own attestation. Nonces expire after 2 minutes and
+die on first use; an invalid LAN token is a hard failure while an absent one
+is recorded and scored by policy. Unsigned requests are rejected (dev-only
+escape hatch: `ALLOW_UNSIGNED_VALIDATION=true` with no database).
 
 ### Host (desktop)
 
@@ -127,7 +131,9 @@ npm start              # compiles TypeScript, then launches the tray app
 ```
 
 Grant the app Bluetooth permission when prompted. Configuration via `host/.env`:
-`SERVER_URL` (default `http://localhost:3000`), `HOST_NAME` (advertised BLE name).
+`SERVER_URL` (default `http://localhost:3000`), `HOST_NAME` (advertised BLE
+name), `HOST_LAN_PORT` (same-network token listener, default `47814`),
+`HOST_ENROLLMENT_CODE` (one-time, first start only).
 
 BLE peripheral support in desktop Node is the known-weakest link (we use
 `@stoprocent/bleno`, the actively maintained bleno fork); the roadmap moves the
@@ -160,6 +166,7 @@ To run on a device: `npm run build`, `npx cap add android` (or `ios`),
 | `ALLOW_UNSIGNED_VALIDATION` | `false` | Dev-only: unsigned validation when no DB is configured |
 | `TIMESTAMP_TOLERANCE_MS` | `300000` | Max signed-timestamp age on nonce requests |
 | `NONCE_TTL_MS` | `120000` | Validity window of a single-use validation nonce |
+| `LAN_TOKEN_TTL_MS` | `120000` | Max age of a host-served same-network token |
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `900000` / `300` | Per-IP request budget |
 | `RATE_LIMIT_ENROLL_MAX` | `10` | Stricter per-IP budget on the enroll endpoints |
 | `TRUST_PROXY` | `false` | Set behind a reverse proxy so limits see real client IPs |
