@@ -229,6 +229,15 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     expect(logged.rows.length).toBeGreaterThan(0);
     expect(logged.rows[0].host_id).toBe(hostId);
     expect(Number(logged.rows[0].site_id)).toBe(siteId);
+
+    // Presence lands in the telemetry stream too (P2.10).
+    const presence = await pool.query(
+      `SELECT value, site_id FROM telemetry WHERE device_uuid = $1 AND type = 'presence'`,
+      [deviceId]
+    );
+    expect(presence.rows.length).toBeGreaterThan(0);
+    expect(Number(presence.rows[0].value)).toBe(1);
+    expect(Number(presence.rows[0].site_id)).toBe(siteId);
   });
 
   test('a bare device envelope without attestation is rejected', async () => {

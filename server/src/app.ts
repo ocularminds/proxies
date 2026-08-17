@@ -744,6 +744,18 @@ export function createApp({ config, stores, notifier = defaultNotifier }: AppDep
 
       await record(true, null, null, device.id);
 
+      // Presence is the platform's first telemetry stream: every approved
+      // validation lands in the same store as any sensor reading.
+      if (device.organizationId !== null) {
+        await stores.telemetry
+          .insertBatch(device.id, device.organizationId, host.siteId, [
+            { ts: new Date().toISOString(), type: 'presence', value: 1, unit: 'event' },
+          ])
+          .catch((err: Error) =>
+            console.error('Failed to record presence telemetry:', err.message)
+          );
+      }
+
       // Mint the single-use QR session the host will display.
       let session: { id: string; expiresInMs: number } | null = null;
       try {
