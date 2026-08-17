@@ -27,10 +27,19 @@ export interface UserStore {
   ): Promise<{ id: number }>;
 }
 
+export interface NonceStore {
+  issue(deviceUuid: string, nonceHash: string, expiresAt: Date): Promise<void>;
+  // Atomically marks the nonce used; false when unknown, expired, already
+  // used, or bound to a different device.
+  claim(nonceHash: string, deviceUuid: string): Promise<boolean>;
+  deleteExpired(olderThanMs: number): Promise<void>;
+}
+
 export interface Stores {
   logs: LogStore;
   devices: DeviceStore;
   users: UserStore;
+  nonces: NonceStore;
   close(): Promise<void>;
 }
 
@@ -114,10 +123,34 @@ export function createStores(databaseUrl: string | null): Stores | null {
     },
   };
 
+  const nonces: NonceStore = {
+    async issue(deviceUuid, nonceHash, expiresAt) {
+      await pool.query(
+        `INSERT INTO nonces (nonce_hash, device_uuid, expires_at) VALUES ($1, $2, $3)`,
+        [nonceHash, deviceUuid, expiresAt]
+      );
+    },
+    async claim(nonceHash, deviceUuid) {
+      const result = await pool.query(
+        `UPDATE nonces SET used_at = now()
+         WHERE nonce_hash = $1 AND device_uuid = $2 AND used_at IS NULL AND expires_at > now()
+         RETURNING id`,
+        [nonceHash, deviceUuid]
+      );
+      return result.rows.length > 0;
+    },
+    async deleteExpired(olderThanMs) {
+      await pool.query(`DELETE FROM nonces WHERE expires_at < now() - ($1 * interval '1 ms')`, [
+        olderThanMs,
+      ]);
+    },
+  };
+
   return {
     logs,
     devices,
     users,
+    nonces,
     async close() {
       await pool.end();
     },

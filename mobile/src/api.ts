@@ -9,7 +9,7 @@ import type { ProximityMetrics } from './metrics';
 
 export interface ValidationEnvelope {
   deviceId: string;
-  timestamp: string;
+  nonce: string;
   signature: string;
   metrics: ProximityMetrics;
 }
@@ -55,13 +55,33 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// Fetches a single-use validation nonce; the request itself is signed.
+async function requestNonce(serverUrl: string, deviceId: string): Promise<string> {
+  const timestamp = new Date().toISOString();
+  const signature = await signMessage(`proxies-nonce\n${deviceId}\n${timestamp}`);
+  const response = await fetch(`${serverUrl}/nonces`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deviceId, timestamp, signature }),
+  });
+  const body = (await response.json()) as { nonce?: string; message?: string };
+  if (!response.ok || !body.nonce) {
+    throw new Error(body.message ?? `Nonce request failed (HTTP ${response.status}).`);
+  }
+  return body.nonce;
+}
+
 export async function buildSignedEnvelope(metrics: ProximityMetrics): Promise<ValidationEnvelope> {
   const deviceId = await getDeviceId();
   if (!deviceId) {
     throw new Error('This device is not enrolled yet — open Enrollment and register it first.');
   }
-  const timestamp = new Date().toISOString();
-  const message = `proxies-validate\n${deviceId}\n${timestamp}\n${canonicalJson(metrics)}`;
+  const serverUrl = getServerUrl();
+  if (!serverUrl) {
+    throw new Error('Server URL is not set — configure it under Enrollment.');
+  }
+  const nonce = await requestNonce(serverUrl, deviceId);
+  const message = `proxies-validate\n${deviceId}\n${nonce}\n${canonicalJson(metrics)}`;
   const signature = await signMessage(message);
-  return { deviceId, timestamp, signature, metrics };
+  return { deviceId, nonce, signature, metrics };
 }

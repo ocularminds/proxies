@@ -15,13 +15,23 @@ export const metricsSchema = z
   .strict();
 
 // The signed envelope a device submits (relayed verbatim by the host over BLE,
-// which is why identity and signature travel in the body, not headers).
+// which is why identity and signature travel in the body, not headers). The
+// nonce is server-issued, device-bound, and single-use.
 export const validationEnvelope = z
+  .object({
+    deviceId: z.string().uuid(),
+    nonce: z.string().min(16).max(128),
+    signature: z.string().min(64).max(512),
+    metrics: metricsSchema,
+  })
+  .strict();
+
+// Signed request for a validation nonce.
+export const nonceRequest = z
   .object({
     deviceId: z.string().uuid(),
     timestamp: z.string().datetime(),
     signature: z.string().min(64).max(512),
-    metrics: metricsSchema,
   })
   .strict();
 
