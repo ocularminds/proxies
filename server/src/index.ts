@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import https from 'node:https';
 import config from './config';
 import { createApp } from './app';
 import { createStores } from './stores';
@@ -13,6 +15,17 @@ if (!stores) {
 
 const app = createApp({ config, stores });
 
-app.listen(config.port, () => {
-  console.log(`Proxies server listening on port ${config.port}`);
-});
+if (config.tlsCertPath && config.tlsKeyPath) {
+  const server = https.createServer(
+    { cert: readFileSync(config.tlsCertPath), key: readFileSync(config.tlsKeyPath) },
+    app
+  );
+  server.listen(config.port, () => {
+    console.log(`Proxies server listening on port ${config.port} (TLS)`);
+  });
+} else {
+  console.warn('TLS not configured: serving plain HTTP. Use TLS or a terminating proxy in production.');
+  app.listen(config.port, () => {
+    console.log(`Proxies server listening on port ${config.port}`);
+  });
+}
