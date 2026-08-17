@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: Proxies (Timescale)
+    uid: proxies-pg
+    type: postgres
+    access: proxy
+    url: db:5432
+    user: postgres
+    secureJsonData:
+      password: proxies
+    jsonData:
+      database: proxies
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    isDefault: true
