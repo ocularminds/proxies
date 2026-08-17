@@ -68,8 +68,10 @@ npm run dev            # or: npm run build && npm start
 npm test
 ```
 
-To persist validation logs, create a Postgres database, apply
-[server/schema.sql](server/schema.sql), and set `DATABASE_URL` in `.env`.
+To persist validation logs, create a Postgres database (≥ 13), set
+`DATABASE_URL` in `.env`, and run `npm run db:migrate` — migrations live in
+[server/migrations](server/migrations) and are applied in order, tracked in
+`schema_migrations`.
 
 ### Host (desktop)
 

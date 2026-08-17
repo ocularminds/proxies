@@ -3,7 +3,7 @@
 > **This is the canonical plan.** It is reviewed and updated continuously: every PR that
 > closes a finding or ships a roadmap item updates the matching status here **in the same PR**.
 >
-> **Last reviewed:** 2026-08-17 · **Current phase:** 0 → 1 · **License:** Apache-2.0 everywhere
+> **Last reviewed:** 2026-08-17 · **Current phase:** 1 (in progress) · **License:** Apache-2.0 everywhere
 
 ## Delivery workflow
 
@@ -55,7 +55,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | G10 | `geolib` used but never declared (found during fix) | — | ✅ P0 (inline haversine) |
 | S1 | Every check skippable by omission | Crit | ✅ P0 (zod strict; required signals) |
 | S2 | Phone attests its own proximity | Crit | ⬜ P1.4 + P1.5 |
-| S3 | No users, devices, auth, or identity | Crit | ⬜ P1.1 + P1.2 |
+| S3 | No users, devices, auth, or identity | Crit | ◐ identity schema landed (P1.1); enrollment + enforcement: P1.2 |
 | S4 | SSRF via client-supplied `hostAddress` | High | ✅ P0 (probe removed) · registry: P1.6 |
 | S5 | No replay protection or freshness | High | ⬜ P1.3 |
 | S6 | Host paired with any BLE device, broadcast its LAN IP | High | ◐ host no longer scans/connects out; peer auth: P1.9 |
@@ -63,7 +63,7 @@ G = gap, S = security, P = performance. Statuses: ✅ fixed · ◐ partial · �
 | S8 | Electron renderer had full Node access | Med | ✅ P0 (contextIsolation + sandbox + preload) |
 | S9 | Unvalidated input crashed the server | Med | ✅ P0 (schema + guarded parse, tested) |
 | S10 | Abandoned/unused/outdated dependencies; no lockfiles | Med | ✅ P0 (pruned, TS toolchain, lockfiles, audit in CI; `@abandonware/bleno` → maintained `@stoprocent/bleno` after tar advisory chain) · bleno exit: P2.7 |
-| S11 | Config and site coordinates hardcoded | Low | ◐ env-based (P0); sites table: P1.1 |
+| S11 | Config and site coordinates hardcoded | Low | ◐ env-based (P0); sites table with per-site thresholds landed (P1.1); request wiring: P1.11 |
 | P1 | Unfiltered always-on BLE scan | High | ✅ P0 (host advertises; no scanning at all) |
 | P2 | Outbound fetch with no timeout | High | ✅ P0 (probe removed; host→server 3 s timeout) |
 | P3 | Single-sample RSSI noise → flaky verdicts | Med | ⬜ P1.5 |
@@ -99,7 +99,7 @@ every message gains identity and freshness. Target: ~3–5 weeks.
 
 | PR | Feature | Closes |
 | --- | --- | --- |
-| P1.1 | Schema expansion: `users`, `devices` (keys, enrollment state), `hosts`, `sites` (per-site thresholds/coords), indexed logs | S3, S11 |
+| P1.1 ✅ | Schema expansion: `organizations`, `users`, `devices` (keys, enrollment state), `hosts`, `sites` (per-site thresholds/coords), indexed logs; migration runner + `npm run db:migrate`; Postgres service in CI | S3 ◐, S11 ◐ |
 | P1.2 | Device enrollment: per-device keypair at registration, bound to a user; signed requests; short-lived tokens | S3 |
 | P1.3 | Server-issued single-use nonces with short TTL; signature + freshness verification | S5 |
 | P1.4 | Nonce-over-BLE flow: phone must deliver the nonce across the radio link; host signs `{nonce, rssi, hostId, ts}` | S2 |
@@ -174,3 +174,4 @@ manual override — before any remote control ships.
 | 2026-08-17 | Phase 0 executed: server/host/mobile rebuilt in strict TypeScript; SSRF removed; validation hardened + tested (10 tests); Electron hardened; CI added; Apache-2.0 standardized (owner decision); lockfiles committed. |
 | 2026-08-17 | Delivery convention adopted (owner decision): one PR per feature per phase; roadmap statuses updated in the closing PR. |
 | 2026-08-17 | CI's audit gate caught 8 production advisories (1 critical: `tar` ≤7.5.20) in `@abandonware/bleno`'s install chain (xpc-connect / bluetooth-hci-socket → node-gyp ≤10.3.1 → tar), with no fixed `tar` reachable from those parents. Host swapped to the maintained, API-compatible `@stoprocent/bleno` fork — production tree audits clean. |
+| 2026-08-17 | PR #1 merged — Phase 0 complete. Phase 1 opened with P1.1: identity/site schema (`organizations`, `users`, `devices`, `hosts`, `sites`), indexed + extended `validation_logs`, numbered SQL migrations with a transactional runner (`npm run db:migrate`), and a Postgres service container in CI running a destructive migration integration test. |
