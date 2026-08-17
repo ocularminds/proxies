@@ -360,6 +360,41 @@ export function createApp({ config, stores, notifier = defaultNotifier }: AppDep
     })
   );
 
+  // Fleet health: every endpoint and host in the org, staleness-flagged.
+  app.get(
+    '/admin/fleet',
+    wrap(async (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      const db = requireStores(res);
+      if (!db) return;
+      const organizationName = String(req.query.organization ?? '');
+      if (!organizationName) {
+        res.status(400).json({ success: false, message: 'organization query param required.' });
+        return;
+      }
+      const org = await db.orgs.findByName(organizationName);
+      if (!org) {
+        res.status(404).json({ success: false, message: 'No organization with that name.' });
+        return;
+      }
+      const staleAfterMs = Math.max(Number(req.query.staleAfterMs) || 60 * 60 * 1000, 60_000);
+      const now = Date.now();
+      const health = (lastSeenAt: Date | null) =>
+        !lastSeenAt ? 'never-seen' : now - lastSeenAt.getTime() > staleAfterMs ? 'stale' : 'online';
+
+      const [devices, hosts] = await Promise.all([
+        db.fleet.listDevices(org.id),
+        db.fleet.listHosts(org.id),
+      ]);
+      res.json({
+        success: true,
+        staleAfterMs,
+        devices: devices.map((device) => ({ ...device, health: health(device.lastSeenAt) })),
+        hosts: hosts.map((host) => ({ ...host, health: health(host.lastSeenAt) })),
+      });
+    })
+  );
+
   app.get(
     '/admin/alerts',
     wrap(async (req, res) => {

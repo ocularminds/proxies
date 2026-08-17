@@ -712,6 +712,34 @@ describe.skipIf(!url)('API with enrollment, nonces, and host attestation (Postgr
     expect(scopedRun.body.alertsFired).toBe(0);
   });
 
+  test('fleet health lists devices and hosts with battery and staleness', async () => {
+    const res = await request(app).get('/admin/fleet?organization=Acme').set(admin);
+    expect(res.status).toBe(200);
+
+    const sensor = res.body.devices.find((d: { id: string }) => d.id === sensorId);
+    expect(sensor).toBeTruthy();
+    expect(sensor.kind).toBe('sensor');
+    expect(sensor.name).toBe('soil-probe-1');
+    expect(sensor.siteName).toBe('HQ');
+    expect(sensor.lastBattery).toBe(87);
+    expect(sensor.health).toBe('online');
+
+    const phone = res.body.devices.find((d: { id: string }) => d.id === deviceId);
+    expect(phone.kind).toBe('phone');
+    expect(phone.userEmail).toBe('festus@example.com');
+
+    const host = res.body.hosts.find((h: { id: string }) => h.id === hostId);
+    expect(host).toBeTruthy();
+    expect(host.siteName).toBe('HQ');
+    expect(host.health).toBe('online');
+
+    const unknownOrg = await request(app).get('/admin/fleet?organization=Nope').set(admin);
+    expect(unknownOrg.status).toBe(404);
+
+    const unauthed = await request(app).get('/admin/fleet?organization=Acme');
+    expect(unauthed.status).toBe(401);
+  });
+
   test('a revoked device is refused', async () => {
     const nonceRes = await fetchNonce(app, deviceId, deviceKeys.privateKey);
     await pool.query(`UPDATE devices SET status = 'revoked' WHERE id = $1`, [deviceId]);
